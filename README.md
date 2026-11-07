@@ -4,6 +4,8 @@ Replace OSRS music tracks with your own opus/ogg/mp3/wav files, without frame dr
 
 JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/alowaniak/music-replacer), built so the game thread never waits on music.
 
+> **Made with AI:** JukeScape's code was written by [Claude](https://claude.com/claude-code), Anthropic's AI coding assistant. shoopdasoup decided what it should do and how it should look, and tested it in game.
+
 ## Why it doesn't stutter
 
 | Original plugin | JukeScape |
@@ -16,7 +18,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 
 ## Usage
 
-- **Side panel:** the music note in RuneLite's sidebar shows what's playing (with a skip button) and every replaced track. Click a track to see its playlist, reorder or remove songs, add more, or toggle shuffle.
+- **Side panel:** the music icon in RuneLite's sidebar shows what's playing (with a skip button) and every replaced track. Click a track to see its playlist, reorder or remove songs, add more, or toggle shuffle.
 - **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3 or wav files.
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.

@@ -444,7 +444,7 @@ final class JukeScapePanel extends PluginPanel
 				for (BossMode boss : bossModes)
 				{
 					modeItem(menu, group, entry, boss.name(), boss.id(), "Play " + boss.description()
-						+ ". Song 1 is for " + boss.slots().get(0) + ", and so on; reorder them with the arrows.");
+						+ ". Song 1 is for " + boss.slotName(0) + ", and so on; reorder them with the arrows.");
 				}
 				menu.show(mode, 0, mode.getHeight());
 			});

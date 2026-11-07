@@ -558,7 +558,7 @@ public class JukeScapePlugin extends Plugin
 			String message = track + " now plays " + modeDescription(entry).replace(" mode", "") + ".";
 			if (entry.bossMode != null)
 			{
-				message = track + " now plays in " + entry.bossMode.name() + " mode: song 1 for " + entry.bossMode.slots().get(0)
+				message = track + " now plays in " + entry.bossMode.name() + " mode: song 1 for " + entry.bossMode.slotName(0)
 					+ ", song 2 for the next, and so on. The last song covers the rest.";
 			}
 			chat(message);

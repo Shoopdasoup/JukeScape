@@ -1,12 +1,11 @@
 package com.jukescape;
 
-import java.util.List;
 import net.runelite.api.Client;
 import net.runelite.api.gameval.VarPlayerID;
 
 /**
- * Doom of Mokhaiotl: one song per delve level. Levels 1 to 8 get harder each time, and every level past 8 (a "deep
- * delve") plays like level 8, so they share the last slot.
+ * Doom of Mokhaiotl: one song per delve level, for as many levels as the player gives songs to. Delves go on past
+ * level 8 for as long as the player survives, so there's no last slot: the last song covers every deeper level.
  */
 final class DelveMode implements BossMode
 {
@@ -15,9 +14,6 @@ final class DelveMode implements BossMode
 	 * outside a fight.
 	 */
 	static final int LEVEL_VARP = VarPlayerID.DOM_CURRENT_LEVEL_TEMP;
-
-	private static final List<String> SLOTS = List.of(
-		"Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7", "Level 8", "Deep delves");
 
 	@Override
 	public String id()
@@ -44,15 +40,20 @@ final class DelveMode implements BossMode
 	}
 
 	@Override
-	public List<String> slots()
+	public int slotCount()
 	{
-		return SLOTS;
+		return UNLIMITED;
+	}
+
+	@Override
+	public String slotName(int slot)
+	{
+		return "Level " + (slot + 1);
 	}
 
 	@Override
 	public int activeSlot(Client client)
 	{
-		int level = client.getVarpValue(LEVEL_VARP);
-		return Math.max(0, Math.min(level, SLOTS.size()) - 1);
+		return Math.max(0, client.getVarpValue(LEVEL_VARP) - 1);
 	}
 }

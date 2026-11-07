@@ -1,0 +1,64 @@
+plugins {
+	id 'java'
+}
+
+repositories {
+	maven {
+		url = 'https://repo.runelite.net'
+	}
+	mavenCentral()
+}
+
+def runeLiteVersion = 'latest.release'
+
+dependencies {
+	compileOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
+
+	compileOnly 'org.projectlombok:lombok:1.18.36'
+	annotationProcessor 'org.projectlombok:lombok:1.18.36'
+
+	// Streaming MP3 decoder (LGPL)
+	implementation 'javazoom:jlayer:1.0.1'
+	// Pure-Java port of libopus (BSD)
+	implementation 'io.github.jaredmdobson:concentus:1.0.2'
+	// Pure-Java Ogg Vorbis decoder (LGPL)
+	implementation 'org.jcraft:jorbis:0.0.17'
+
+	testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
+	testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
+}
+
+// The YouTube add-on isn't part of the Plugin Hub plugin (it runs yt-dlp, which Hub plugins aren't allowed to do).
+// It's only built into the developer-mode client that `run` launches. Move youtube-addon/ out of this repository
+// before submitting to the Hub.
+sourceSets {
+	youtube {
+		java.srcDirs = ['youtube-addon/src/main/java']
+		compileClasspath += main.output + main.compileClasspath
+		runtimeClasspath += main.output + main.runtimeClasspath
+	}
+	test {
+		compileClasspath += youtube.output
+		runtimeClasspath += youtube.output
+	}
+}
+
+configurations {
+	youtubeAnnotationProcessor.extendsFrom annotationProcessor
+}
+
+group = 'com.jukescape'
+version = '1.0.0'
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release.set(11)
+}
+
+tasks.register('run', JavaExec) {
+	description = 'Launches RuneLite in developer mode with JukeScape and its YouTube add-on loaded.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.jukescape.JukeScapePluginTest'
+	jvmArgs '-ea'
+	args '--developer-mode'
+}

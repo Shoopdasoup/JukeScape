@@ -1,0 +1,664 @@
+package com.jukescape;
+
+import com.google.common.base.Strings;
+import com.google.inject.Module;
+import com.google.inject.Provider;
+import com.google.inject.Provides;
+import java.awt.Desktop;
+import java.io.File;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import javax.inject.Inject;
+import javax.swing.JFileChooser;
+import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.FontID;
+import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.events.ClientTick;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuOpened;
+import net.runelite.api.events.VarClientIntChanged;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.SpriteID;
+import net.runelite.api.gameval.VarClientID;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.widgets.Widget;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.game.chatbox.ChatboxPanelManager;
+import net.runelite.client.game.chatbox.ChatboxTextMenuInput;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.game.SpriteManager;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.Text;
+
+@Slf4j
+@PluginDescriptor(
+	name = "JukeScape - OSRS Music Replacer",
+	description = "Replace music tracks with your own audio files, without frame drops",
+	tags = {"music", "replace", "override", "track", "song", "remix", "jukebox"}
+)
+public class JukeScapePlugin extends Plugin
+{
+	/**
+	 * What the game's own music is turned down to while a replacement plays. At 0 the game drops its track and only
+	 * the settings slider script (which plugins aren't allowed to run, it sends a packet) brings it back. At 1 the
+	 * track keeps playing inaudibly, so restoring is just setting the volume back.
+	 */
+	private static final int MUTED_GAME_VOLUME = 1;
+	private static final int MUSIC_TAB = 13;
+	private static final int MENU_PAGE_SIZE = 4;
+	private static final int NAV_ICON_SIZE = 16;
+
+	@Inject
+	private Client client;
+	@Inject
+	private ClientThread clientThread;
+	@Inject
+	private ChatboxPanelManager chatboxPanelManager;
+	@Inject
+	private JukeScapeConfig config;
+	@Inject
+	private ClientToolbar clientToolbar;
+	@Inject
+	private SpriteManager spriteManager;
+
+	private ExecutorService executor;
+	private AudioEngine engine;
+	private Library library;
+	private volatile JukeScapePanel panel;
+	private volatile NavigationButton navButton;
+	private final List<ReplacementSource> sources = new CopyOnWriteArrayList<>();
+	private volatile float volumeScale;
+	private File lastChooserDir;
+	/**
+	 * The track whose replacement is playing, for the panel, or null.
+	 */
+	private volatile String nowPlayingTrack;
+
+	// Client thread state
+	private String lastTrack;
+	private int lastVersion = -1;
+	private Library.Entry active;
+	private boolean wasAudible;
+	/**
+	 * The game's music volume from before we turned it down, or -1 if we haven't.
+	 */
+	private int savedGameVolume = -1;
+	private boolean trackListDirty = true;
+
+	@Provides
+	JukeScapeConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(JukeScapeConfig.class);
+	}
+
+	/**
+	 * Lets companion plugins that declare a dependency on JukeScape inject it to add replacement sources.
+	 */
+	@Override
+	protected Module getPublicModule()
+	{
+		// A provider rather than toInstance, which would make Guice re-inject this plugin's fields in the dependent's
+		// injector, where its config isn't bound
+		Provider<JukeScapePlugin> self = () -> this;
+		return binder -> binder.bind(JukeScapePlugin.class).toProvider(self);
+	}
+
+	@Override
+	protected void startUp()
+	{
+		executor = Executors.newCachedThreadPool(r ->
+		{
+			Thread t = new Thread(r, "jukescape-io");
+			t.setDaemon(true);
+			return t;
+		});
+		engine = new AudioEngine(path -> chat("Couldn't play " + path.getFileName() + ", is it a valid opus/ogg/mp3/wav file?"));
+		library = new Library(engine);
+		loadConfig();
+
+		runIo("read " + Library.DIR, () ->
+		{
+			library.deleteTempFiles();
+			library.rescan();
+		});
+
+		// The sidebar button uses the game's own music tab icon, which loads with the game's sprites
+		JukeScapePanel panel = new JukeScapePanel(this, library, engine);
+		this.panel = panel;
+		spriteManager.getSpriteAsync(SpriteID.SideIcons.MUSIC, 0, sprite -> SwingUtilities.invokeLater(() ->
+		{
+			if (this.panel != panel)
+			{
+				return; // Shut down while the sprite loaded
+			}
+			navButton = NavigationButton.builder()
+				.tooltip("JukeScape")
+				.icon(sprite == null ? Icons.navigation() : ImageUtil.resizeImage(sprite, NAV_ICON_SIZE, NAV_ICON_SIZE, true))
+				.priority(8)
+				.panel(panel)
+				.build();
+			clientToolbar.addNavigation(navButton);
+		}));
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		panel = null;
+		if (navButton != null)
+		{
+			clientToolbar.removeNavigation(navButton);
+			navButton = null;
+		}
+		nowPlayingTrack = null;
+		executor.shutdownNow();
+		engine.shutdown();
+		clientThread.invoke(() ->
+		{
+			restoreGameMusic();
+			setNowPlayingFont(false);
+			setTrackListFonts(false);
+			active = null;
+			lastTrack = null;
+			lastVersion = -1;
+			wasAudible = false;
+			trackListDirty = true;
+		});
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (JukeScapeConfig.GROUP.equals(event.getGroup()))
+		{
+			loadConfig();
+		}
+	}
+
+	/**
+	 * Config getters go through the config manager, so cache the values instead of calling them every tick.
+	 */
+	private void loadConfig()
+	{
+		volumeScale = config.volume() / 100f;
+		engine.setFadeMs(config.crossfade());
+	}
+
+	public void addReplacementSource(ReplacementSource source)
+	{
+		sources.add(source);
+	}
+
+	List<ReplacementSource> sources()
+	{
+		return sources;
+	}
+
+	String nowPlayingTrack()
+	{
+		return nowPlayingTrack;
+	}
+
+	/**
+	 * Adds a song to {@code track} from a companion plugin's source. Sources prompt in the chatbox, so this hops to the
+	 * client thread.
+	 */
+	void addFrom(ReplacementSource source, String track)
+	{
+		clientThread.invokeLater(() -> source.choose(track, true));
+	}
+
+	public void removeReplacementSource(ReplacementSource source)
+	{
+		sources.remove(source);
+	}
+
+	/**
+	 * A path in the replacements folder for a source to download into. Leftovers from interrupted downloads are
+	 * deleted on startup.
+	 */
+	public Path tempPath(String name)
+	{
+		return Library.DIR.resolve(Library.TEMP_PREFIX + name);
+	}
+
+	/**
+	 * Makes a downloaded file the replacement for {@code track}, or adds it to the track's playlist, after checking
+	 * it plays, and reports the result in chat. Takes ownership of the file, and blocks, so only call it off the
+	 * client thread.
+	 *
+	 * @param name the song's name, for its file name in a playlist
+	 */
+	public void install(String track, Path file, String name, boolean add) throws IOException
+	{
+		library.install(track, file, true, name, add);
+		reportInstalled(track, name, add);
+	}
+
+	private void reportInstalled(String track, String name, boolean add)
+	{
+		int songs = songCount(track);
+		chat(add && songs > 1 ? "Added " + name + " to " + track + " (" + songs + " songs)." : "Replaced " + track + " with " + name + ".");
+	}
+
+	private int songCount(String track)
+	{
+		Library.Entry entry = library.get(track);
+		return entry == null ? 0 : entry.files.size();
+	}
+
+	@Subscribe
+	public void onGameStateChanged(GameStateChanged event)
+	{
+		if (event.getGameState() == GameState.LOGIN_SCREEN)
+		{
+			engine.stop();
+			nowPlayingTrack = null;
+			restoreGameMusic();
+			active = null;
+			lastTrack = null;
+			lastVersion = -1;
+			wasAudible = false;
+		}
+	}
+
+	/**
+	 * Runs every client frame, so it only does field reads and comparisons. Everything else happens on change.
+	 */
+	@Subscribe
+	public void onClientTick(ClientTick tick)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return;
+		}
+
+		Widget nowPlaying = client.getWidget(InterfaceID.Music.NOW_PLAYING_TEXT);
+		String track = nowPlaying == null ? lastTrack : nowPlaying.getText();
+		int version = library.version();
+		boolean changed = false;
+		if (version != lastVersion || !Objects.equals(track, lastTrack))
+		{
+			trackListDirty |= version != lastVersion;
+			lastTrack = track;
+			lastVersion = version;
+			Library.Entry entry = Strings.isNullOrEmpty(track) ? null : library.get(track);
+			if (!Objects.equals(entry, active))
+			{
+				active = entry;
+				changed = true;
+				setNowPlayingFont(active != null);
+			}
+		}
+
+		float volume = effectiveVolume();
+		boolean audible = volume > 0;
+		if (changed || audible != wasAudible)
+		{
+			// Like the game, a track starts over when music is unmuted
+			if (active != null && audible)
+			{
+				engine.play(active.files, active.shuffle);
+				nowPlayingTrack = active.track;
+			}
+			else
+			{
+				engine.stop();
+				nowPlayingTrack = null;
+			}
+			wasAudible = audible;
+		}
+		engine.setVolume(volume);
+
+		if (active != null)
+		{
+			// Keep the game's own track inaudible. The game resets the volume whenever the settings change, so
+			// remember its latest value. At 0 the player muted music themselves and there's nothing to turn down.
+			int gameVolume = client.getMusicVolume();
+			if (gameVolume != MUTED_GAME_VOLUME && gameVolume != 0)
+			{
+				savedGameVolume = gameVolume;
+				client.setMusicVolume(MUTED_GAME_VOLUME);
+			}
+		}
+		else
+		{
+			restoreGameMusic();
+		}
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick tick)
+	{
+		if (trackListDirty)
+		{
+			trackListDirty = !setTrackListFonts(true);
+		}
+	}
+
+	@Subscribe
+	public void onVarClientIntChanged(VarClientIntChanged event)
+	{
+		if (event.getIndex() == VarClientID.TOPLEVEL_PANEL && client.getVarcIntValue(VarClientID.TOPLEVEL_PANEL) == MUSIC_TAB)
+		{
+			trackListDirty = true;
+		}
+	}
+
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		MenuEntry first = event.getFirstEntry();
+		if (first == null)
+		{
+			return;
+		}
+
+		int widgetId = first.getParam1();
+		if (widgetId == InterfaceID.Music.JUKEBOX)
+		{
+			String track = Text.removeTags(first.getTarget());
+			if (track.isEmpty())
+			{
+				return;
+			}
+			// The last entry added shows at the top
+			if (library.get(track) != null)
+			{
+				addMenuEntry(first, "Playlist", () -> openPlaylistMenu(track));
+				addMenuEntry(first, "Add song", () -> openReplaceMenu(track, true));
+			}
+			addMenuEntry(first, "Replace", () -> openReplaceMenu(track, false));
+		}
+		else if (widgetId == InterfaceID.Toplevel.STONE13
+			|| widgetId == InterfaceID.ToplevelOsrsStretch.STONE13
+			|| widgetId == InterfaceID.ToplevelPreEoc.STONE13
+			|| widgetId == InterfaceID.ToplevelOsm.STONE13)
+		{
+			addMenuEntry(first, "Music replacements", this::openLibraryMenu);
+		}
+	}
+
+	private void addMenuEntry(MenuEntry copyOf, String option, Runnable action)
+	{
+		client.getMenu().createMenuEntry(-1)
+			.setOption(option)
+			.setTarget(copyOf.getTarget())
+			.setType(MenuAction.RUNELITE)
+			.onClick(e -> action.run());
+	}
+
+	/**
+	 * @param add add songs to the track's playlist instead of replacing it
+	 */
+	private void openReplaceMenu(String track, boolean add)
+	{
+		if (sources.isEmpty())
+		{
+			chooseLocalFiles(track, add);
+			return;
+		}
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput(
+			add ? "Add a song to " + track + " from:" : "Replace " + track + " with:");
+		for (ReplacementSource source : sources)
+		{
+			menu.option(source.label(), () -> source.choose(track, add));
+		}
+		menu.option("A local audio file", () -> chooseLocalFiles(track, add));
+		menu.build();
+	}
+
+	private void openPlaylistMenu(String track)
+	{
+		Library.Entry entry = library.get(track);
+		if (entry == null)
+		{
+			return;
+		}
+		int songs = entry.files.size();
+		String order = songs < 2 ? "" : entry.shuffle ? ", shuffled" : ", in order";
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput(
+			track + ": " + songs + (songs == 1 ? " song" : " songs") + order);
+		if (songs > 1)
+		{
+			boolean shuffle = !entry.shuffle;
+			menu.option(shuffle ? "Shuffle" : "Play in order", () -> runIo("change the order of " + track, () ->
+			{
+				library.setShuffle(track, shuffle);
+				chat(track + (shuffle ? " now shuffles." : " now plays in order."));
+			}));
+			menu.option("Remove a song", () -> chooseSongToRemove(track, entry.files, 0));
+		}
+		menu.option("Remove replacement", () -> runIo("remove " + track, () ->
+		{
+			library.remove(track);
+			chat("Removed the replacement for " + track + ".");
+		}));
+		menu.build();
+	}
+
+	private void chooseSongToRemove(String track, List<Path> songs, int offset)
+	{
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput("Remove which song from " + track + "?");
+		int end = Math.min(songs.size(), offset + MENU_PAGE_SIZE);
+		for (Path song : songs.subList(offset, end))
+		{
+			String name = Library.songName(song);
+			menu.option(Text.escapeJagex(truncate(name, 50)), () -> runIo("remove " + name, () ->
+			{
+				library.removeSong(song);
+				chat("Removed " + name + " from " + track + ".");
+			}));
+		}
+		if (end < songs.size())
+		{
+			menu.option("More songs", () -> chooseSongToRemove(track, songs, end));
+		}
+		menu.build();
+	}
+
+	private void openLibraryMenu()
+	{
+		int count = library.size();
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput("Music replacements (" + count + " tracks)");
+		menu.option("Open replacements folder", this::openFolder);
+		menu.option("Reload folder", () -> runIo("reload " + Library.DIR, () ->
+		{
+			library.rescan();
+			chat("Loaded " + library.size() + " replacements.");
+		}));
+		if (count > 0)
+		{
+			menu.option("Remove all replacements", this::confirmRemoveAll);
+		}
+		menu.build();
+	}
+
+	/**
+	 * Lets the player pick one or more files. When replacing, the first replaces the track and the rest are added
+	 * after it.
+	 */
+	void chooseLocalFiles(String track, boolean add)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			JFileChooser chooser = new JFileChooser(lastChooserDir);
+			chooser.setDialogTitle(add ? "Add songs to " + track : "Replace " + track);
+			chooser.setMultiSelectionEnabled(true);
+			chooser.setFileFilter(new FileNameExtensionFilter("Audio files (opus, ogg, mp3, wav)", "opus", "ogg", "mp3", "wav"));
+			if (chooser.showOpenDialog(client.getCanvas()) != JFileChooser.APPROVE_OPTION)
+			{
+				return;
+			}
+			File[] files = chooser.getSelectedFiles();
+			if (files.length == 0)
+			{
+				return;
+			}
+			lastChooserDir = files[0].getParentFile();
+			runIo((add ? "add songs to " : "replace ") + track, () ->
+			{
+				for (int i = 0; i < files.length; i++)
+				{
+					library.install(track, files[i].toPath(), false, Library.songName(files[i].toPath()), add || i > 0);
+				}
+				if (files.length == 1)
+				{
+					reportInstalled(track, Library.songName(files[0].toPath()), add);
+				}
+				else if (add)
+				{
+					chat("Added " + files.length + " songs to " + track + " (" + songCount(track) + " songs).");
+				}
+				else
+				{
+					chat("Replaced " + track + " with " + files.length + " songs.");
+				}
+			});
+		});
+	}
+
+	void openFolder()
+	{
+		runIo("open " + Library.DIR, () ->
+		{
+			Files.createDirectories(Library.DIR);
+			if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN))
+			{
+				Desktop.getDesktop().open(Library.DIR.toFile());
+			}
+			else
+			{
+				chat("Replacements are in " + Library.DIR);
+			}
+			chat("Name opus/ogg/mp3/wav files exactly like the track (e.g. Sea Shanty 2.opus), or put several in a folder named "
+				+ "like the track for a playlist, then use Reload folder.");
+		});
+	}
+
+	private void confirmRemoveAll()
+	{
+		chatboxPanelManager.openTextMenuInput("Delete all " + library.size() + " replacement files?")
+			.option("Yes, delete them", () -> runIo("remove replacements", () ->
+				chat("Removed " + library.removeAll() + " replacements.")))
+			.option("No", () -> { })
+			.build();
+	}
+
+	private float effectiveVolume()
+	{
+		float master = client.getVarpValue(VarPlayerID.OPTION_MASTER_VOLUME) / 100f;
+		float music = client.getVarpValue(VarPlayerID.OPTION_MUSIC) / 100f;
+		float volume = master * music;
+		// Squared because loudness is perceived logarithmically
+		return Math.max(0f, Math.min(1f, volume * volume * volumeScale));
+	}
+
+	private void restoreGameMusic()
+	{
+		if (savedGameVolume < 0)
+		{
+			return;
+		}
+		// Unless the game already set a new volume itself
+		if (client.getMusicVolume() == MUTED_GAME_VOLUME)
+		{
+			client.setMusicVolume(savedGameVolume);
+		}
+		savedGameVolume = -1;
+	}
+
+	private void setNowPlayingFont(boolean replaced)
+	{
+		Widget nowPlaying = client.getWidget(InterfaceID.Music.NOW_PLAYING_TEXT);
+		if (nowPlaying != null)
+		{
+			nowPlaying.setFontId(replaced ? FontID.BOLD_12 : FontID.PLAIN_12);
+		}
+	}
+
+	/**
+	 * Bolds replaced tracks in the music list. Only runs when the list or the library changes.
+	 *
+	 * @return false if the music list isn't loaded
+	 */
+	private boolean setTrackListFonts(boolean highlight)
+	{
+		Widget list = client.getWidget(InterfaceID.Music.JUKEBOX);
+		if (list == null)
+		{
+			return false;
+		}
+		Widget[] rows = list.getDynamicChildren();
+		if (rows != null)
+		{
+			for (Widget row : rows)
+			{
+				row.setFontId(highlight && library.get(row.getText()) != null ? FontID.BOLD_12 : FontID.PLAIN_12);
+			}
+		}
+		return true;
+	}
+
+	private static String truncate(String s, int max)
+	{
+		return s.length() <= max ? s : s.substring(0, max - 1) + "…";
+	}
+
+	interface IoTask
+	{
+		void run() throws Exception;
+	}
+
+	/**
+	 * Runs disk and network work off the client thread, reporting failures in chat.
+	 */
+	void runIo(String what, IoTask task)
+	{
+		executor.execute(() ->
+		{
+			try
+			{
+				task.run();
+			}
+			catch (InterruptedIOException e)
+			{
+				log.debug("Cancelled: {}", what);
+			}
+			catch (Exception e)
+			{
+				log.warn("Failed to {}", what, e);
+				chat("Failed to " + what + ": " + e.getMessage());
+			}
+		});
+	}
+
+	/**
+	 * Shows a message in the chatbox. Safe to call from any thread.
+	 */
+	public void chat(String message)
+	{
+		clientThread.invokeLater(() ->
+			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "[JukeScape] " + Text.escapeJagex(message), null));
+	}
+}

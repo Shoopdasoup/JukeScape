@@ -47,6 +47,12 @@ final class Library
 	static final String TEMP_PREFIX = ".tmp-";
 	static final String SHUFFLE_MARKER = ".shuffle";
 	/**
+	 * In a playlist or profile folder, holds the id of the {@link BossMode} it plays in. Takes priority over shuffle.
+	 */
+	static final String MODE_MARKER = ".mode";
+	static final String MODE_IN_ORDER = "in-order";
+	static final String MODE_SHUFFLE = "shuffle";
+	/**
 	 * In a track folder with profiles, names the active one.
 	 */
 	static final String PROFILE_MARKER = ".profile";
@@ -78,6 +84,10 @@ final class Library
 		final List<Path> files;
 		final boolean shuffle;
 		/**
+		 * The boss mode the active profile plays in, or null for in order or shuffled.
+		 */
+		final BossMode bossMode;
+		/**
 		 * The folder the active profile's songs are in, or null for a single file.
 		 */
 		final Path dir;
@@ -95,13 +105,14 @@ final class Library
 		final boolean layered;
 		private final List<Long> modified;
 
-		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, Path dir, String profile,
-			List<String> profiles, boolean layered)
+		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, BossMode bossMode, Path dir,
+			String profile, List<String> profiles, boolean layered)
 		{
 			this.track = track;
 			this.files = Collections.unmodifiableList(files);
 			this.modified = modified;
 			this.shuffle = shuffle;
+			this.bossMode = bossMode;
 			this.dir = dir;
 			this.profile = profile;
 			this.profiles = Collections.unmodifiableList(profiles);
@@ -113,6 +124,14 @@ final class Library
 			return !files.isEmpty();
 		}
 
+		/**
+		 * {@link #MODE_IN_ORDER}, {@link #MODE_SHUFFLE} or a boss mode's id.
+		 */
+		String mode()
+		{
+			return bossMode != null ? bossMode.id() : shuffle ? MODE_SHUFFLE : MODE_IN_ORDER;
+		}
+
 		@Override
 		public boolean equals(Object o)
 		{
@@ -122,13 +141,14 @@ final class Library
 			}
 			Entry other = (Entry) o;
 			return track.equals(other.track) && files.equals(other.files) && modified.equals(other.modified)
-				&& shuffle == other.shuffle && profile.equals(other.profile) && profiles.equals(other.profiles);
+				&& shuffle == other.shuffle && bossMode == other.bossMode && profile.equals(other.profile)
+				&& profiles.equals(other.profiles);
 		}
 
 		@Override
 		public int hashCode()
 		{
-			return Objects.hash(track, files, modified, shuffle, profile, profiles);
+			return Objects.hash(track, files, modified, shuffle, bossMode, profile, profiles);
 		}
 	}
 
@@ -278,8 +298,30 @@ final class Library
 		{
 			modified.add(Files.getLastModifiedTime(file).toMillis());
 		}
-		boolean shuffle = songsDir != null && Files.exists(songsDir.resolve(SHUFFLE_MARKER));
-		return new Entry(track, files, modified, shuffle, songsDir, profile, profiles, !profileDirs.isEmpty());
+		BossMode bossMode = songsDir == null ? null : bossMode(songsDir, track);
+		boolean shuffle = bossMode == null && songsDir != null && Files.exists(songsDir.resolve(SHUFFLE_MARKER));
+		return new Entry(track, files, modified, shuffle, bossMode, songsDir, profile, profiles, !profileDirs.isEmpty());
+	}
+
+	/**
+	 * The boss mode a folder's {@value #MODE_MARKER} file names, if it's one this track has.
+	 */
+	private static BossMode bossMode(Path dir, String track)
+	{
+		Path marker = dir.resolve(MODE_MARKER);
+		if (!Files.isRegularFile(marker))
+		{
+			return null;
+		}
+		try
+		{
+			BossMode mode = BossMode.byId(new String(Files.readAllBytes(marker), StandardCharsets.UTF_8).trim());
+			return mode != null && mode.appliesTo(track) ? mode : null;
+		}
+		catch (IOException e)
+		{
+			return null;
+		}
 	}
 
 	/**
@@ -531,22 +573,54 @@ final class Library
 
 	synchronized void setShuffle(String track, boolean shuffle) throws IOException
 	{
+		setMode(track, shuffle ? MODE_SHUFFLE : MODE_IN_ORDER);
+	}
+
+	/**
+	 * Sets how the active profile plays: {@link #MODE_IN_ORDER}, {@link #MODE_SHUFFLE} or a boss mode's id.
+	 */
+	synchronized void setMode(String track, String mode) throws IOException
+	{
 		Entry entry = get(track);
-		if (entry == null || entry.dir == null)
+		if (entry == null)
 		{
 			return;
 		}
-		Path marker = entry.dir.resolve(SHUFFLE_MARKER);
-		if (shuffle)
+		if (entry.dir == null)
 		{
-			if (!Files.exists(marker))
-			{
-				Files.createFile(marker);
-			}
+			throw new IOException(track + " is a single file, add another song to it first");
+		}
+		BossMode bossMode = BossMode.byId(mode);
+		if (bossMode != null && !bossMode.appliesTo(track))
+		{
+			throw new IOException(bossMode.name() + " mode is only for " + bossMode.track());
+		}
+		if (bossMode == null && !mode.equals(MODE_SHUFFLE) && !mode.equals(MODE_IN_ORDER))
+		{
+			throw new IOException("unknown mode " + mode);
+		}
+
+		Path shuffle = entry.dir.resolve(SHUFFLE_MARKER);
+		Path marker = entry.dir.resolve(MODE_MARKER);
+		if (bossMode != null)
+		{
+			// Leave any shuffle marker, so switching back to a normal mode restores it
+			Files.write(marker, bossMode.id().getBytes(StandardCharsets.UTF_8));
 		}
 		else
 		{
 			Files.deleteIfExists(marker);
+			if (mode.equals(MODE_SHUFFLE))
+			{
+				if (!Files.exists(shuffle))
+				{
+					Files.createFile(shuffle);
+				}
+			}
+			else
+			{
+				Files.deleteIfExists(shuffle);
+			}
 		}
 		rescan();
 	}
@@ -733,16 +807,19 @@ final class Library
 			String ext = extension(song.getFileName().toString());
 			Files.move(song, main.resolve(nextSongName(main, songName(song), ext)));
 		}
-		Path shuffle = dir.resolve(SHUFFLE_MARKER);
-		if (Files.exists(shuffle))
+		for (String setting : List.of(SHUFFLE_MARKER, MODE_MARKER))
 		{
-			if (Files.exists(main.resolve(SHUFFLE_MARKER)))
+			Path marker = dir.resolve(setting);
+			if (Files.exists(marker))
 			{
-				Files.delete(shuffle);
-			}
-			else
-			{
-				Files.move(shuffle, main.resolve(SHUFFLE_MARKER));
+				if (Files.exists(main.resolve(setting)))
+				{
+					Files.delete(marker);
+				}
+				else
+				{
+					Files.move(marker, main.resolve(setting));
+				}
 			}
 		}
 		writeActiveProfile(dir, active);
@@ -805,6 +882,7 @@ final class Library
 			Files.deleteIfExists(song);
 		}
 		Files.deleteIfExists(dir.resolve(SHUFFLE_MARKER));
+		Files.deleteIfExists(dir.resolve(MODE_MARKER));
 		try
 		{
 			Files.deleteIfExists(dir);

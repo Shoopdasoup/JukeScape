@@ -22,6 +22,8 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 - **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3 or wav files.
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
+- **Play modes:** the track's **Mode** button in the side panel (or **Playlist → Play mode** in game) plays the songs in order or shuffled. Some boss tracks also get a mode of their own:
+  - **Delve** (The Doom, for the Doom of Mokhaiotl): a song for each delve level. Song 1 plays on level 1, song 2 on level 2, and so on, with the 9th covering every deep delve. If there are fewer songs than levels, the last one covers the rest.
 - **Profiles:** give a track several playlists and switch between them without losing any, from the track's **Profile** button in the side panel or **Playlist → Switch profile / New profile** in game. A new profile starts empty, and an empty profile plays the game's own music.
 - **Everything else:** right-click the music tab icon → **Music replacements**:
   - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it

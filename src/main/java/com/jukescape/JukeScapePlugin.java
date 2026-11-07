@@ -31,6 +31,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientIntChanged;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.SpriteID;
 import net.runelite.api.gameval.VarClientID;
@@ -98,6 +99,10 @@ public class JukeScapePlugin extends Plugin
 	private String lastTrack;
 	private int lastVersion = -1;
 	private Library.Entry active;
+	/**
+	 * The active boss mode's slot, or -1 when the replacement isn't in a boss mode.
+	 */
+	private int lastSlot = -1;
 	private boolean wasAudible;
 	/**
 	 * The game's music volume from before we turned it down, or -1 if we haven't.
@@ -330,6 +335,11 @@ public class JukeScapePlugin extends Plugin
 			}
 		}
 
+		// A boss mode picks one song by how far into the fight the player is. Only a var read, so fine every frame.
+		int slot = active != null && active.bossMode != null ? active.bossMode.activeSlot(client) : -1;
+		changed |= slot != lastSlot;
+		lastSlot = slot;
+
 		float volume = effectiveVolume();
 		boolean audible = volume > 0;
 		if (changed || audible != wasAudible)
@@ -337,7 +347,14 @@ public class JukeScapePlugin extends Plugin
 			// Like the game, a track starts over when music is unmuted
 			if (active != null && audible)
 			{
-				engine.play(active.files, active.shuffle);
+				if (slot >= 0)
+				{
+					engine.play(List.of(active.files.get(BossMode.songFor(slot, active.files.size()))), false);
+				}
+				else
+				{
+					engine.play(active.files, active.shuffle);
+				}
 				nowPlayingTrack = active.track;
 			}
 			else
@@ -372,6 +389,21 @@ public class JukeScapePlugin extends Plugin
 		if (trackListDirty)
 		{
 			trackListDirty = !setTrackListFonts(true);
+		}
+	}
+
+	/**
+	 * Temporary, until the delve level var is confirmed in game: logs the Doom of Mokhaiotl level vars when they
+	 * change.
+	 */
+	@Subscribe
+	public void onVarbitChanged(VarbitChanged event)
+	{
+		int varp = event.getVarpId();
+		if (varp == VarPlayerID.DOM_CURRENT_LEVEL_TEMP || varp == VarPlayerID.DOM_LAST_DELVE_LEVEL)
+		{
+			log.info("[delve] varp {} = {} (current level temp = {}, last delve level = {})", varp, event.getValue(),
+				client.getVarpValue(VarPlayerID.DOM_CURRENT_LEVEL_TEMP), client.getVarpValue(VarPlayerID.DOM_LAST_DELVE_LEVEL));
 		}
 	}
 
@@ -455,18 +487,15 @@ public class JukeScapePlugin extends Plugin
 			return;
 		}
 		int songs = entry.files.size();
-		String order = songs < 2 ? "" : entry.shuffle ? ", shuffled" : ", in order";
 		String profile = entry.profiles.size() > 1 ? " (" + entry.profile + ")" : "";
 		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput(
-			track + profile + ": " + songs + (songs == 1 ? " song" : " songs") + order);
+			track + profile + ": " + songs + (songs == 1 ? " song" : " songs") + (songs > 1 ? ", " + modeDescription(entry) : ""));
+		if (entry.dir != null && (songs > 1 || !BossMode.forTrack(entry.track).isEmpty()))
+		{
+			menu.option("Play mode", () -> chooseMode(entry));
+		}
 		if (songs > 1)
 		{
-			boolean shuffle = !entry.shuffle;
-			menu.option(shuffle ? "Shuffle" : "Play in order", () -> runIo("change the order of " + track, () ->
-			{
-				library.setShuffle(track, shuffle);
-				chat(track + (shuffle ? " now shuffles." : " now plays in order."));
-			}));
 			menu.option("Remove a song", () -> chooseSongToRemove(track, entry.files, 0));
 		}
 		if (entry.profiles.size() > 1)
@@ -489,6 +518,51 @@ public class JukeScapePlugin extends Plugin
 			}
 		});
 		menu.build();
+	}
+
+	private void chooseMode(Library.Entry entry)
+	{
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput("How should " + entry.track + " play?");
+		menu.option(modeOption("In order", Library.MODE_IN_ORDER, entry), () -> setMode(entry.track, Library.MODE_IN_ORDER));
+		menu.option(modeOption("Shuffle", Library.MODE_SHUFFLE, entry), () -> setMode(entry.track, Library.MODE_SHUFFLE));
+		for (BossMode mode : BossMode.forTrack(entry.track))
+		{
+			menu.option(modeOption(mode.name() + ": " + mode.description(), mode.id(), entry), () -> setMode(entry.track, mode.id()));
+		}
+		menu.build();
+	}
+
+	private static String modeOption(String label, String mode, Library.Entry entry)
+	{
+		return entry.mode().equals(mode) ? label + " (current)" : label;
+	}
+
+	/**
+	 * "in order", "shuffled" or the boss mode's name, for menus.
+	 */
+	static String modeDescription(Library.Entry entry)
+	{
+		return entry.bossMode != null ? entry.bossMode.name().toLowerCase() + " mode" : entry.shuffle ? "shuffled" : "in order";
+	}
+
+	void setMode(String track, String mode)
+	{
+		runIo("change how " + track + " plays", () ->
+		{
+			library.setMode(track, mode);
+			Library.Entry entry = library.get(track);
+			if (entry == null)
+			{
+				return;
+			}
+			String message = track + " now plays " + modeDescription(entry).replace(" mode", "") + ".";
+			if (entry.bossMode != null)
+			{
+				message = track + " now plays in " + entry.bossMode.name() + " mode: song 1 for " + entry.bossMode.slots().get(0)
+					+ ", song 2 for the next, and so on. The last song covers the rest.";
+			}
+			chat(message);
+		});
 	}
 
 	private void removeReplacement(String track)

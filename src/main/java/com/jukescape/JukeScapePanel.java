@@ -222,7 +222,8 @@ final class JukeScapePanel extends PluginPanel
 		int songs = entry.files.size();
 		String profile = entry.profiles.size() > 1 ? entry.profile + ": " : "";
 		String count = songs == 0 ? "no songs, game music" : songs + (songs == 1 ? " song" : " songs");
-		JLabel info = new JLabel(profile + count + (songs > 1 && entry.shuffle ? ", shuffled" : ""));
+		boolean showMode = entry.bossMode != null || (songs > 1 && entry.shuffle);
+		JLabel info = new JLabel(profile + count + (showMode && songs > 0 ? ", " + JukeScapePlugin.modeDescription(entry) : ""));
 		info.setFont(FontManager.getRunescapeSmallFont());
 		info.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		header.add(name);
@@ -282,10 +283,12 @@ final class JukeScapePanel extends PluginPanel
 
 		JPanel row = new JPanel(new BorderLayout(4, 0));
 		row.setOpaque(false);
-		JLabel label = new JLabel((index + 1) + ". " + name);
+		// In a boss mode the position is what decides when a song plays, so say that instead of a number
+		String position = entry.bossMode != null ? entry.bossMode.slotLabel(index, entry.files.size()) + ": " : (index + 1) + ". ";
+		JLabel label = new JLabel(position + name);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setForeground(trackPlaying && song.equals(shownSong) ? ColorScheme.BRAND_ORANGE : ColorScheme.TEXT_COLOR);
-		label.setToolTipText(name);
+		label.setToolTipText(position + name);
 		row.add(label, BorderLayout.CENTER);
 
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 3, 0));
@@ -404,8 +407,9 @@ final class JukeScapePanel extends PluginPanel
 
 	private JPanel actions(Library.Entry entry)
 	{
-		boolean canShuffle = entry.dir != null && entry.files.size() > 1;
-		JPanel actions = new JPanel(new GridLayout(1, canShuffle ? 3 : 2, 4, 0));
+		List<BossMode> bossModes = BossMode.forTrack(entry.track);
+		boolean hasModes = entry.dir != null && (entry.files.size() > 1 || !bossModes.isEmpty());
+		JPanel actions = new JPanel(new GridLayout(1, hasModes ? 3 : 2, 4, 0));
 		actions.setOpaque(false);
 		actions.setBorder(new EmptyBorder(4, 0, 0, 0));
 
@@ -427,14 +431,24 @@ final class JukeScapePanel extends PluginPanel
 		});
 		actions.add(add);
 
-		if (canShuffle)
+		if (hasModes)
 		{
-			boolean shuffle = !entry.shuffle;
-			JButton order = button(entry.shuffle ? "In order" : "Shuffle");
-			order.setToolTipText(entry.shuffle ? "Play the songs in order" : "Play the songs in random order");
-			order.addActionListener(e -> plugin.runIo("change the order of " + entry.track,
-				() -> library.setShuffle(entry.track, shuffle)));
-			actions.add(order);
+			JButton mode = button("Mode");
+			mode.setToolTipText("How the songs play: " + JukeScapePlugin.modeDescription(entry));
+			mode.addActionListener(e ->
+			{
+				JPopupMenu menu = new JPopupMenu();
+				ButtonGroup group = new ButtonGroup();
+				modeItem(menu, group, entry, "In order", Library.MODE_IN_ORDER, "Play the songs one after another");
+				modeItem(menu, group, entry, "Shuffle", Library.MODE_SHUFFLE, "Play the songs in random order");
+				for (BossMode boss : bossModes)
+				{
+					modeItem(menu, group, entry, boss.name(), boss.id(), "Play " + boss.description()
+						+ ". Song 1 is for " + boss.slots().get(0) + ", and so on; reorder them with the arrows.");
+				}
+				menu.show(mode, 0, mode.getHeight());
+			});
+			actions.add(mode);
 		}
 
 		JButton remove = button("Remove");
@@ -452,6 +466,19 @@ final class JukeScapePanel extends PluginPanel
 		});
 		actions.add(remove);
 		return actions;
+	}
+
+	private void modeItem(JPopupMenu menu, ButtonGroup group, Library.Entry entry, String label, String mode, String tooltip)
+	{
+		boolean current = entry.mode().equals(mode);
+		JRadioButtonMenuItem item = new JRadioButtonMenuItem(label, current);
+		item.setToolTipText(tooltip);
+		group.add(item);
+		if (!current)
+		{
+			item.addActionListener(e -> plugin.setMode(entry.track, mode));
+		}
+		menu.add(item);
 	}
 
 	private JPanel footer()

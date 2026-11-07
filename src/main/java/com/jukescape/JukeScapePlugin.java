@@ -31,7 +31,6 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientIntChanged;
-import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.SpriteID;
 import net.runelite.api.gameval.VarClientID;
@@ -389,21 +388,6 @@ public class JukeScapePlugin extends Plugin
 		if (trackListDirty)
 		{
 			trackListDirty = !setTrackListFonts(true);
-		}
-	}
-
-	/**
-	 * Temporary, until the delve level var is confirmed in game: logs the Doom of Mokhaiotl level vars when they
-	 * change.
-	 */
-	@Subscribe
-	public void onVarbitChanged(VarbitChanged event)
-	{
-		int varp = event.getVarpId();
-		if (varp == VarPlayerID.DOM_CURRENT_LEVEL_TEMP || varp == VarPlayerID.DOM_LAST_DELVE_LEVEL)
-		{
-			log.info("[delve] varp {} = {} (current level temp = {}, last delve level = {})", varp, event.getValue(),
-				client.getVarpValue(VarPlayerID.DOM_CURRENT_LEVEL_TEMP), client.getVarpValue(VarPlayerID.DOM_LAST_DELVE_LEVEL));
 		}
 	}
 

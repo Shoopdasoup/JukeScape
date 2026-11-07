@@ -38,7 +38,8 @@ Files live in `%USERPROFILE%\.runelite\music-replacer`, the same folder the orig
 
 ## YouTube add-on (developer mode only)
 
-`youtube-addon/` holds a second plugin, **JukeScape YouTube**, that adds *A YouTube search* to the Replace menu.
+`youtube-addon/` holds a second plugin, **JukeScape YouTube**, that adds *A YouTube link* and *A YouTube search* to the Replace and Add song menus.
+Paste a video link, or a playlist link to download up to 200 songs into a track's playlist. Playlists and long videos show their length and estimated size and ask before downloading.
 It isn't part of the Plugin Hub plugin: it runs [yt-dlp](https://github.com/yt-dlp/yt-dlp), and Hub plugins aren't allowed to run external programs.
 Move `youtube-addon/` out of this repository before submitting to the Hub.
 

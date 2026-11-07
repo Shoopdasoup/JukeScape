@@ -251,8 +251,20 @@ public class JukeScapePlugin extends Plugin
 	 */
 	public void install(String track, Path file, String name, boolean add) throws IOException
 	{
+		install(track, file, name, add, true);
+	}
+
+	/**
+	 * Like {@link #install(String, Path, String, boolean)}, but {@code report} false skips the chat message, for
+	 * sources that install many songs in a row and report once at the end.
+	 */
+	public void install(String track, Path file, String name, boolean add, boolean report) throws IOException
+	{
 		library.install(track, file, true, name, add);
-		reportInstalled(track, name, add);
+		if (report)
+		{
+			reportInstalled(track, name, add);
+		}
 	}
 
 	private void reportInstalled(String track, String name, boolean add)
@@ -261,7 +273,10 @@ public class JukeScapePlugin extends Plugin
 		chat(add && songs > 1 ? "Added " + name + " to " + track + " (" + songs + " songs)." : "Replaced " + track + " with " + name + ".");
 	}
 
-	private int songCount(String track)
+	/**
+	 * How many songs {@code track}'s replacement has, or 0 if it has none.
+	 */
+	public int songCount(String track)
 	{
 		Library.Entry entry = library.get(track);
 		return entry == null ? 0 : entry.files.size();

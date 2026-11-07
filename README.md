@@ -14,7 +14,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 | On track change, copies the whole file to a temp file **on the game thread**; WAVs are fully decoded into memory first | Game thread just posts a request (~15 µs); a dedicated audio thread streams the file |
 | JaCo player singleton, volume pushed to it every frame | Own `SourceDataLine`, volume/fades applied per sample with smoothing, no clicks |
 | Errors only in the log | Failures show in chat |
-| Music-retrigger script could fire every frame when volume was 0 (the freeze that got it pulled from the Plugin Hub) | Never runs game scripts: turns the game's music down to 1 while a replacement plays, then restores your volume |
+| Mutes the game's music by setting its volume to 0, then runs a game script to restart it afterwards | Never runs game scripts: turns the game's music down to 1 while a replacement plays, then restores your volume |
 
 ## Usage
 

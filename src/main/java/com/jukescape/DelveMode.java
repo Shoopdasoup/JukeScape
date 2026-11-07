@@ -10,9 +10,10 @@ import net.runelite.api.gameval.VarPlayerID;
 final class DelveMode implements BossMode
 {
 	/**
-	 * How many levels of the current delve the player has cleared: 0 during level 1, 1 once level 1's boss dies and
-	 * through level 2, and so on. So the next level's song starts at the kill, while the player heads down. Back to 0
-	 * outside a fight. (Confirmed in game: reading it as the current level played every song one level late.)
+	 * One less than the delve level the player is on: 0 during level 1, 1 from entering level 2, and so on. It
+	 * changes as the player enters the next level, not at the kill (the game sets DOM_LAST_DELVE_LEVEL at the kill,
+	 * then this when they go down), so each level's song starts as they arrive. Back to 0 outside a fight.
+	 * Confirmed in game: reading it as the level itself played every song one level late.
 	 */
 	static final int LEVELS_CLEARED_VARP = VarPlayerID.DOM_CURRENT_LEVEL_TEMP;
 

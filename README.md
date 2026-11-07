@@ -22,6 +22,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 - **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3 or wav files.
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
+- **Profiles:** give a track several playlists and switch between them without losing any, from the track's **Profile** button in the side panel or **Playlist → Switch profile / New profile** in game. A new profile starts empty, and an empty profile plays the game's own music.
 - **Everything else:** right-click the music tab icon → **Music replacements**:
   - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it
   - *Reload folder*, *Remove all replacements*
@@ -30,6 +31,7 @@ A single replacement loops and a playlist keeps going until the game moves to an
 Replaced tracks show in bold in the music list and in the "now playing" label.
 
 Songs replaced or added in-game are saved in a folder named after the track, as `01 - Song name.opus`, `02 - …`, so they keep their names. Playlist folders play in file name order, and an empty `.shuffle` file in the folder plays them in random order.
+Once a track has profiles, each one is a folder inside the track's folder (`The Doom/Remixes/01 - Song.opus`), and a `.profile` file names the one that plays.
 
 Files live in `%USERPROFILE%\.runelite\music-replacer`, the same folder the original plugin used, so your existing replacements carry over. Turn the original plugin off while using this one.
 

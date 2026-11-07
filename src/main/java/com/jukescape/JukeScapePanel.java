@@ -15,12 +15,14 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import javax.swing.BorderFactory;
+import javax.swing.ButtonGroup;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JRadioButtonMenuItem;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
@@ -218,7 +220,9 @@ final class JukeScapePanel extends PluginPanel
 		name.setFont(FontManager.getRunescapeBoldFont());
 		name.setForeground(playing ? ColorScheme.BRAND_ORANGE : Color.WHITE);
 		int songs = entry.files.size();
-		JLabel info = new JLabel(songs + (songs == 1 ? " song" : " songs") + (songs > 1 && entry.shuffle ? ", shuffled" : ""));
+		String profile = entry.profiles.size() > 1 ? entry.profile + ": " : "";
+		String count = songs == 0 ? "no songs, game music" : songs + (songs == 1 ? " song" : " songs");
+		JLabel info = new JLabel(profile + count + (songs > 1 && entry.shuffle ? ", shuffled" : ""));
 		info.setFont(FontManager.getRunescapeSmallFont());
 		info.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		header.add(name);
@@ -254,9 +258,16 @@ final class JukeScapePanel extends PluginPanel
 			JPanel body = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 			body.setOpaque(false);
 			body.setBorder(new EmptyBorder(0, 8, 8, 8));
+			body.add(profileButton(entry));
 			for (int i = 0; i < songs; i++)
 			{
 				body.add(songRow(entry, i, playing));
+			}
+			if (songs == 0)
+			{
+				JLabel empty = message("No songs, so the game's music plays.");
+				empty.setToolTipText("Add songs to this profile, or switch to another one");
+				body.add(empty);
 			}
 			body.add(actions(entry));
 			box.add(body, BorderLayout.CENTER);
@@ -310,6 +321,87 @@ final class JukeScapePanel extends PluginPanel
 		return row;
 	}
 
+	/**
+	 * Shows the active profile, and opens a menu to switch to another or create, rename or delete one.
+	 */
+	private JButton profileButton(Library.Entry entry)
+	{
+		JButton button = button("Profile: " + entry.profile);
+		button.setToolTipText("Each profile is its own playlist for this track. Click to switch, add, rename or delete profiles.");
+		button.addActionListener(e ->
+		{
+			JPopupMenu menu = new JPopupMenu();
+			ButtonGroup group = new ButtonGroup();
+			for (String name : entry.profiles)
+			{
+				JRadioButtonMenuItem item = new JRadioButtonMenuItem(name, name.equals(entry.profile));
+				group.add(item);
+				if (!name.equals(entry.profile))
+				{
+					item.addActionListener(ev -> plugin.switchProfile(entry.track, name));
+				}
+				menu.add(item);
+			}
+			menu.addSeparator();
+
+			JMenuItem create = new JMenuItem("New profile...");
+			create.addActionListener(ev ->
+			{
+				String name = ask("Name the new profile for " + entry.track + ". It starts empty, so the game's music plays until you add songs.", "");
+				if (name != null)
+				{
+					plugin.newProfile(entry.track, name);
+				}
+			});
+			menu.add(create);
+
+			JMenuItem rename = new JMenuItem("Rename " + entry.profile + "...");
+			rename.addActionListener(ev ->
+			{
+				String name = ask("New name for the profile " + entry.profile + ":", entry.profile);
+				if (name != null && !name.equals(entry.profile))
+				{
+					plugin.runIo("rename " + entry.profile, () ->
+					{
+						String saved = library.renameProfile(entry.track, entry.profile, name);
+						plugin.chat("Renamed " + entry.track + "'s profile " + entry.profile + " to " + saved + ".");
+					});
+				}
+			});
+			menu.add(rename);
+
+			if (entry.profiles.size() > 1)
+			{
+				JMenuItem delete = new JMenuItem("Delete " + entry.profile + "...");
+				delete.addActionListener(ev ->
+				{
+					int songs = entry.files.size();
+					if (confirm("Delete the profile " + entry.profile + " from " + entry.track + "?"
+						+ (songs == 0 ? "" : " This deletes " + (songs == 1 ? "its song file." : "its " + songs + " song files."))))
+					{
+						plugin.runIo("delete " + entry.profile, () ->
+						{
+							library.deleteProfile(entry.track, entry.profile);
+							plugin.chat("Deleted " + entry.track + "'s profile " + entry.profile + ".");
+						});
+					}
+				});
+				menu.add(delete);
+			}
+			menu.show(button, 0, button.getHeight());
+		});
+		return button;
+	}
+
+	/**
+	 * @return the text entered, or null if cancelled or left blank
+	 */
+	private String ask(String question, String initial)
+	{
+		Object answer = JOptionPane.showInputDialog(this, question, "JukeScape", JOptionPane.PLAIN_MESSAGE, null, null, initial);
+		return answer == null || answer.toString().isBlank() ? null : answer.toString().trim();
+	}
+
 	private JPanel actions(Library.Entry entry)
 	{
 		boolean canShuffle = entry.dir != null && entry.files.size() > 1;
@@ -350,8 +442,10 @@ final class JukeScapePanel extends PluginPanel
 		remove.addActionListener(e ->
 		{
 			int songs = entry.files.size();
-			if (confirm("Remove the replacement for " + entry.track + "? This deletes "
-				+ (songs == 1 ? "its song file." : "all " + songs + " of its song files.")))
+			String what = entry.profiles.size() > 1
+				? "all " + entry.profiles.size() + " of its profiles and their song files."
+				: songs == 1 ? "its song file." : "all " + songs + " of its song files.";
+			if (confirm("Remove the replacement for " + entry.track + "? This deletes " + what))
 			{
 				plugin.runIo("remove " + entry.track, () -> library.remove(entry.track));
 			}

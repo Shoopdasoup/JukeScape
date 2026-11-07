@@ -1,6 +1,7 @@
 package com.jukescape;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -45,6 +46,15 @@ final class Library
 	 */
 	static final String TEMP_PREFIX = ".tmp-";
 	static final String SHUFFLE_MARKER = ".shuffle";
+	/**
+	 * In a track folder with profiles, names the active one.
+	 */
+	static final String PROFILE_MARKER = ".profile";
+	/**
+	 * The profile a track's songs go into when it gets a second one.
+	 */
+	static final String MAIN_PROFILE = "Main";
+	private static final int MAX_PROFILE_NAME = 40;
 
 	private static final Pattern ACCENTS = Pattern.compile("\\p{M}");
 	private static final Pattern INVALID_CHARS = Pattern.compile("[\\\\/:*?\"<>|\\p{Cntrl}]");
@@ -62,23 +72,45 @@ final class Library
 		 */
 		final String track;
 		/**
-		 * Songs in play order. One file is a plain replacement that loops.
+		 * The active profile's songs in play order. One file is a plain replacement that loops. Empty when the active
+		 * profile has no songs, which means the game's own music plays.
 		 */
 		final List<Path> files;
 		final boolean shuffle;
 		/**
-		 * The playlist folder, or null for a single file.
+		 * The folder the active profile's songs are in, or null for a single file.
 		 */
 		final Path dir;
+		/**
+		 * The active profile's name, {@value #MAIN_PROFILE} for a track without profile folders.
+		 */
+		final String profile;
+		/**
+		 * Every profile's name, sorted. Always at least one.
+		 */
+		final List<String> profiles;
+		/**
+		 * Whether the track's folder holds profile folders, rather than its songs directly.
+		 */
+		final boolean layered;
 		private final List<Long> modified;
 
-		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, Path dir)
+		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, Path dir, String profile,
+			List<String> profiles, boolean layered)
 		{
 			this.track = track;
 			this.files = Collections.unmodifiableList(files);
 			this.modified = modified;
 			this.shuffle = shuffle;
 			this.dir = dir;
+			this.profile = profile;
+			this.profiles = Collections.unmodifiableList(profiles);
+			this.layered = layered;
+		}
+
+		boolean hasSongs()
+		{
+			return !files.isEmpty();
 		}
 
 		@Override
@@ -90,13 +122,13 @@ final class Library
 			}
 			Entry other = (Entry) o;
 			return track.equals(other.track) && files.equals(other.files) && modified.equals(other.modified)
-				&& shuffle == other.shuffle;
+				&& shuffle == other.shuffle && profile.equals(other.profile) && profiles.equals(other.profiles);
 		}
 
 		@Override
 		public int hashCode()
 		{
-			return Objects.hash(track, files, modified, shuffle);
+			return Objects.hash(track, files, modified, shuffle, profile, profiles);
 		}
 	}
 
@@ -175,7 +207,8 @@ final class Library
 		for (Map.Entry<String, Path> e : playlists.entrySet())
 		{
 			Entry entry = entry(null, e.getValue());
-			if (!entry.files.isEmpty())
+			// A track whose active profile is empty still shows, so another profile can be picked
+			if (entry.hasSongs() || entry.layered)
 			{
 				scanned.put(e.getKey(), entry);
 			}
@@ -193,23 +226,131 @@ final class Library
 	 */
 	private static Entry entry(Path single, Path dir) throws IOException
 	{
-		List<Path> files = new ArrayList<>();
+		String track = dir != null ? dir.getFileName().toString() : stripExtension(single.getFileName().toString());
+		List<Path> root = new ArrayList<>();
 		if (single != null)
 		{
-			files.add(single);
+			root.add(single);
 		}
+		List<Path> profileDirs = new ArrayList<>();
 		if (dir != null)
 		{
-			files.addAll(songs(dir));
+			root.addAll(songs(dir));
+			profileDirs = profileDirs(dir);
 		}
+
+		List<Path> files = new ArrayList<>();
+		Path songsDir = dir;
+		String profile = MAIN_PROFILE;
+		List<String> profiles = new ArrayList<>();
+		if (profileDirs.isEmpty())
+		{
+			files.addAll(root);
+			profiles.add(MAIN_PROFILE);
+		}
+		else
+		{
+			for (Path p : profileDirs)
+			{
+				profiles.add(p.getFileName().toString());
+			}
+			// Songs left directly in the folder (only if put there by hand) count as part of the Main profile
+			if (!root.isEmpty() && find(profiles, MAIN_PROFILE) == null)
+			{
+				profiles.add(MAIN_PROFILE);
+				profiles.sort(String.CASE_INSENSITIVE_ORDER);
+			}
+			profile = activeProfile(dir, profiles, !root.isEmpty());
+			if (profile.equalsIgnoreCase(MAIN_PROFILE))
+			{
+				files.addAll(root);
+			}
+			Path active = findProfileDir(dir, profile);
+			if (active != null)
+			{
+				files.addAll(songs(active));
+				songsDir = active;
+			}
+		}
+
 		List<Long> modified = new ArrayList<>(files.size());
 		for (Path file : files)
 		{
 			modified.add(Files.getLastModifiedTime(file).toMillis());
 		}
-		boolean shuffle = dir != null && Files.exists(dir.resolve(SHUFFLE_MARKER));
-		String track = dir != null ? dir.getFileName().toString() : stripExtension(single.getFileName().toString());
-		return new Entry(track, files, modified, shuffle, dir);
+		boolean shuffle = songsDir != null && Files.exists(songsDir.resolve(SHUFFLE_MARKER));
+		return new Entry(track, files, modified, shuffle, songsDir, profile, profiles, !profileDirs.isEmpty());
+	}
+
+	/**
+	 * The profile the track's {@value #PROFILE_MARKER} file names, or a sensible one if it names none of them.
+	 */
+	private static String activeProfile(Path dir, List<String> profiles, boolean rootSongs)
+	{
+		String wanted = null;
+		try
+		{
+			wanted = new String(Files.readAllBytes(dir.resolve(PROFILE_MARKER)), StandardCharsets.UTF_8).trim();
+		}
+		catch (IOException e)
+		{
+			// No marker yet
+		}
+		String found = wanted == null ? null : find(profiles, wanted);
+		if (found != null)
+		{
+			return found;
+		}
+		String main = find(profiles, MAIN_PROFILE);
+		return rootSongs && main != null ? main : profiles.get(0);
+	}
+
+	private static String find(List<String> names, String name)
+	{
+		for (String n : names)
+		{
+			if (n.equalsIgnoreCase(name))
+			{
+				return n;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * A track folder's profile folders, sorted by name.
+	 */
+	private static List<Path> profileDirs(Path dir) throws IOException
+	{
+		List<Path> dirs = new ArrayList<>();
+		if (!Files.isDirectory(dir))
+		{
+			return dirs;
+		}
+		try (DirectoryStream<Path> children = Files.newDirectoryStream(dir))
+		{
+			for (Path child : children)
+			{
+				if (!child.getFileName().toString().startsWith(".") && Files.isDirectory(child))
+				{
+					dirs.add(child);
+				}
+			}
+		}
+		dirs.sort(Comparator.comparing(p -> p.getFileName().toString().toLowerCase(Locale.ROOT)));
+		return dirs;
+	}
+
+	private static Path findProfileDir(Path dir, String name) throws IOException
+	{
+		for (Path p : profileDirs(dir))
+		{
+			if (p.getFileName().toString().equalsIgnoreCase(name))
+			{
+				return p;
+			}
+		}
+		return null;
 	}
 
 	private static List<Path> songs(Path dir) throws IOException
@@ -279,20 +420,32 @@ final class Library
 			verifyPlayable(staged);
 
 			Entry old = get(track);
+			if (old != null && old.layered)
+			{
+				// With profiles, songs only ever go into the active profile's folder
+				materialize(track);
+				rescan();
+				old = get(track);
+			}
+			boolean layered = old != null && old.layered;
 			if (old != null && !add)
 			{
+				// Replacing only clears the active profile; the others stay
 				release(old);
 				deletePlaylist(old.dir);
-				for (String other : EXTENSIONS)
+				if (!layered)
 				{
-					Files.deleteIfExists(DIR.resolve(stem + other));
+					for (String other : EXTENSIONS)
+					{
+						Files.deleteIfExists(DIR.resolve(stem + other));
+					}
 				}
 			}
 
-			Path dir = DIR.resolve(stem);
+			Path dir = layered ? old.dir : DIR.resolve(stem);
 			Files.createDirectories(dir);
 			// A single replacement file becomes the first song. Its song name isn't known, so it keeps the track's.
-			for (String other : EXTENSIONS)
+			for (String other : layered ? List.<String>of() : EXTENSIONS)
 			{
 				Path single = DIR.resolve(stem + other);
 				if (Files.isRegularFile(single))
@@ -322,7 +475,8 @@ final class Library
 		engine.release(file);
 		Files.deleteIfExists(file);
 		Path dir = file.getParent();
-		if (!dir.equals(DIR) && songs(dir).isEmpty())
+		// An emptied playlist goes, but an emptied profile stays, playing the game's music until it gets songs
+		if (DIR.equals(dir.getParent()) && songs(dir).isEmpty() && profileDirs(dir).isEmpty())
 		{
 			deletePlaylist(dir);
 		}
@@ -397,19 +551,17 @@ final class Library
 		rescan();
 	}
 
+	/**
+	 * Removes a track's replacement, with all of its profiles.
+	 */
 	synchronized void remove(String track) throws IOException
 	{
 		Entry entry = get(track);
 		if (entry != null)
 		{
 			release(entry);
-			deletePlaylist(entry.dir);
 		}
-		String stem = fileStem(track);
-		for (String ext : EXTENSIONS)
-		{
-			Files.deleteIfExists(DIR.resolve(stem + ext));
-		}
+		deleteTrack(track);
 		rescan();
 	}
 
@@ -418,15 +570,217 @@ final class Library
 		engine.release(null);
 		for (Entry entry : entries.values())
 		{
-			for (Path file : entry.files)
-			{
-				Files.deleteIfExists(file);
-			}
-			deletePlaylist(entry.dir);
+			deleteTrack(entry.track);
 		}
 		int removed = entries.size();
 		rescan();
 		return removed;
+	}
+
+	private static void deleteTrack(String track) throws IOException
+	{
+		String stem = fileStem(track);
+		Path dir = DIR.resolve(stem);
+		for (Path profile : profileDirs(dir))
+		{
+			deletePlaylist(profile);
+		}
+		Files.deleteIfExists(dir.resolve(PROFILE_MARKER));
+		deletePlaylist(dir);
+		for (String ext : EXTENSIONS)
+		{
+			Files.deleteIfExists(DIR.resolve(stem + ext));
+		}
+	}
+
+	/**
+	 * Adds an empty profile to a track and makes it the active one, so the game's music plays until it gets songs.
+	 * The track's current songs become its {@value #MAIN_PROFILE} profile if it had none.
+	 *
+	 * @return the profile's name as saved
+	 */
+	synchronized String createProfile(String track, String name) throws IOException
+	{
+		String clean = profileName(name);
+		materialize(track);
+		Path dir = DIR.resolve(fileStem(track));
+		if (findProfileDir(dir, clean) != null)
+		{
+			throw new IOException(track + " already has a profile called " + clean);
+		}
+		Files.createDirectories(dir.resolve(clean));
+		writeActiveProfile(dir, clean);
+		rescan();
+		return clean;
+	}
+
+	synchronized void switchProfile(String track, String name) throws IOException
+	{
+		materialize(track);
+		Path dir = DIR.resolve(fileStem(track));
+		Path profile = findProfileDir(dir, name);
+		if (profile == null)
+		{
+			throw new IOException(track + " has no profile called " + name);
+		}
+		writeActiveProfile(dir, profile.getFileName().toString());
+		rescan();
+	}
+
+	/**
+	 * @return the profile's new name as saved
+	 */
+	synchronized String renameProfile(String track, String from, String to) throws IOException
+	{
+		String clean = profileName(to);
+		materialize(track);
+		Path dir = DIR.resolve(fileStem(track));
+		Path source = findProfileDir(dir, from);
+		if (source == null)
+		{
+			throw new IOException(track + " has no profile called " + from);
+		}
+		Path existing = findProfileDir(dir, clean);
+		if (existing != null && !existing.equals(source))
+		{
+			throw new IOException(track + " already has a profile called " + clean);
+		}
+		boolean active = currentProfile(dir).equalsIgnoreCase(from);
+		String keepActive = currentProfile(dir);
+
+		// The playing song's file is open, and Windows can't rename a folder with an open file in it
+		for (Path song : songs(source))
+		{
+			engine.release(song);
+		}
+		// Through a temporary name, so changing only the case of a name works on Windows too
+		Path temp = dir.resolve(TEMP_PREFIX + System.nanoTime());
+		Files.move(source, temp);
+		Files.move(temp, dir.resolve(clean));
+		writeActiveProfile(dir, active ? clean : keepActive);
+		rescan();
+		return clean;
+	}
+
+	/**
+	 * Deletes one profile and its songs. Deleting the last one removes the track's replacement.
+	 */
+	synchronized void deleteProfile(String track, String name) throws IOException
+	{
+		materialize(track);
+		Path dir = DIR.resolve(fileStem(track));
+		Path profile = findProfileDir(dir, name);
+		if (profile == null)
+		{
+			throw new IOException(track + " has no profile called " + name);
+		}
+		String active = currentProfile(dir);
+		for (Path song : songs(profile))
+		{
+			engine.release(song);
+		}
+		deletePlaylist(profile);
+
+		List<Path> left = profileDirs(dir);
+		if (left.isEmpty())
+		{
+			Files.deleteIfExists(dir.resolve(PROFILE_MARKER));
+			deletePlaylist(dir);
+		}
+		else
+		{
+			writeActiveProfile(dir, active.equalsIgnoreCase(name) ? left.get(0).getFileName().toString() : active);
+		}
+		rescan();
+	}
+
+	/**
+	 * Moves songs kept directly in a track's folder, and a single replacement file, into its {@value #MAIN_PROFILE}
+	 * profile folder, so that every profile is a folder before profiles are changed.
+	 */
+	private void materialize(String track) throws IOException
+	{
+		String stem = fileStem(track);
+		Path dir = DIR.resolve(stem);
+		List<Path> root = new ArrayList<>();
+		for (String ext : EXTENSIONS)
+		{
+			Path single = DIR.resolve(stem + ext);
+			if (Files.isRegularFile(single))
+			{
+				root.add(single);
+			}
+		}
+		if (Files.isDirectory(dir))
+		{
+			root.addAll(songs(dir));
+		}
+		if (root.isEmpty())
+		{
+			return;
+		}
+
+		String active = Files.isDirectory(dir) && !profileDirs(dir).isEmpty() ? currentProfile(dir) : MAIN_PROFILE;
+		Path main = findProfileDir(dir, MAIN_PROFILE);
+		if (main == null)
+		{
+			main = dir.resolve(MAIN_PROFILE);
+			Files.createDirectories(main);
+		}
+		for (Path song : root)
+		{
+			engine.release(song);
+			String ext = extension(song.getFileName().toString());
+			Files.move(song, main.resolve(nextSongName(main, songName(song), ext)));
+		}
+		Path shuffle = dir.resolve(SHUFFLE_MARKER);
+		if (Files.exists(shuffle))
+		{
+			if (Files.exists(main.resolve(SHUFFLE_MARKER)))
+			{
+				Files.delete(shuffle);
+			}
+			else
+			{
+				Files.move(shuffle, main.resolve(SHUFFLE_MARKER));
+			}
+		}
+		writeActiveProfile(dir, active);
+	}
+
+	/**
+	 * The active profile of a track folder that has profile folders, read the same way the index reads it.
+	 */
+	private static String currentProfile(Path dir) throws IOException
+	{
+		List<String> names = new ArrayList<>();
+		for (Path p : profileDirs(dir))
+		{
+			names.add(p.getFileName().toString());
+		}
+		return names.isEmpty() ? MAIN_PROFILE : activeProfile(dir, names, !songs(dir).isEmpty());
+	}
+
+	private static void writeActiveProfile(Path dir, String name) throws IOException
+	{
+		Files.write(dir.resolve(PROFILE_MARKER), name.getBytes(StandardCharsets.UTF_8));
+	}
+
+	/**
+	 * A profile name made safe to be a folder name.
+	 */
+	static String profileName(String name) throws IOException
+	{
+		String clean = fileStem(name == null ? "" : name.trim());
+		if (clean.length() > MAX_PROFILE_NAME)
+		{
+			clean = EDGE_DOTS_SPACES.matcher(clean.substring(0, MAX_PROFILE_NAME)).replaceAll("");
+		}
+		if (clean.isEmpty())
+		{
+			throw new IOException("a profile name needs at least one letter or number");
+		}
+		return clean;
 	}
 
 	private void release(Entry entry)

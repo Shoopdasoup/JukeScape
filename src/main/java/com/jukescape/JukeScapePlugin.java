@@ -318,6 +318,10 @@ public class JukeScapePlugin extends Plugin
 			lastTrack = track;
 			lastVersion = version;
 			Library.Entry entry = Strings.isNullOrEmpty(track) ? null : library.get(track);
+			if (entry != null && !entry.hasSongs())
+			{
+				entry = null; // An empty profile plays the game's own music
+			}
 			if (!Objects.equals(entry, active))
 			{
 				active = entry;
@@ -452,8 +456,9 @@ public class JukeScapePlugin extends Plugin
 		}
 		int songs = entry.files.size();
 		String order = songs < 2 ? "" : entry.shuffle ? ", shuffled" : ", in order";
+		String profile = entry.profiles.size() > 1 ? " (" + entry.profile + ")" : "";
 		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput(
-			track + ": " + songs + (songs == 1 ? " song" : " songs") + order);
+			track + profile + ": " + songs + (songs == 1 ? " song" : " songs") + order);
 		if (songs > 1)
 		{
 			boolean shuffle = !entry.shuffle;
@@ -464,12 +469,91 @@ public class JukeScapePlugin extends Plugin
 			}));
 			menu.option("Remove a song", () -> chooseSongToRemove(track, entry.files, 0));
 		}
-		menu.option("Remove replacement", () -> runIo("remove " + track, () ->
+		if (entry.profiles.size() > 1)
+		{
+			menu.option("Switch profile", () -> chooseProfile(track, entry, 0));
+		}
+		menu.option("New profile", () -> askNewProfile(track));
+		menu.option("Remove replacement", () ->
+		{
+			if (entry.profiles.size() > 1)
+			{
+				chatboxPanelManager.openTextMenuInput("Delete all " + entry.profiles.size() + " profiles of " + track + " and their songs?")
+					.option("Yes, delete them all", () -> removeReplacement(track))
+					.option("No", () -> {})
+					.build();
+			}
+			else
+			{
+				removeReplacement(track);
+			}
+		});
+		menu.build();
+	}
+
+	private void removeReplacement(String track)
+	{
+		runIo("remove " + track, () ->
 		{
 			library.remove(track);
 			chat("Removed the replacement for " + track + ".");
-		}));
+		});
+	}
+
+	private void chooseProfile(String track, Library.Entry entry, int offset)
+	{
+		ChatboxTextMenuInput menu = chatboxPanelManager.openTextMenuInput("Switch " + track + " to which profile?");
+		int end = Math.min(entry.profiles.size(), offset + MENU_PAGE_SIZE);
+		for (String name : entry.profiles.subList(offset, end))
+		{
+			String label = name.equals(entry.profile) ? name + " (playing)" : name;
+			menu.option(Text.escapeJagex(truncate(label, 50)), () -> switchProfile(track, name));
+		}
+		if (end < entry.profiles.size())
+		{
+			menu.option("More profiles", () -> chooseProfile(track, entry, end));
+		}
 		menu.build();
+	}
+
+	/**
+	 * Asks for a name in the chatbox, then adds an empty profile to {@code track} and switches to it.
+	 */
+	void askNewProfile(String track)
+	{
+		chatboxPanelManager.openTextInput("Name the new profile for " + track + ":")
+			.onDone((String name) ->
+			{
+				if (!name.isBlank())
+				{
+					newProfile(track, name);
+				}
+			})
+			.build();
+	}
+
+	void newProfile(String track, String name)
+	{
+		runIo("add a profile to " + track, () ->
+		{
+			Library.Entry before = library.get(track);
+			boolean first = before != null && !before.layered && before.hasSongs();
+			String saved = library.createProfile(track, name);
+			chat("Switched " + track + " to its new profile " + saved + "."
+				+ (first ? " Its songs so far are kept in the profile " + Library.MAIN_PROFILE + "." : "")
+				+ " The game's music plays until you add songs to it.");
+		});
+	}
+
+	void switchProfile(String track, String name)
+	{
+		runIo("switch " + track + " to " + name, () ->
+		{
+			library.switchProfile(track, name);
+			Library.Entry entry = library.get(track);
+			int songs = entry == null ? 0 : entry.files.size();
+			chat(track + " now plays its profile " + name + (songs == 0 ? ", which has no songs, so the game's music plays." : "."));
+		});
 	}
 
 	private void chooseSongToRemove(String track, List<Path> songs, int offset)
@@ -629,7 +713,8 @@ public class JukeScapePlugin extends Plugin
 		{
 			for (Widget row : rows)
 			{
-				row.setFontId(highlight && library.get(row.getText()) != null ? FontID.BOLD_12 : FontID.PLAIN_12);
+				Library.Entry entry = highlight ? library.get(row.getText()) : null;
+				row.setFontId(entry != null && entry.hasSongs() ? FontID.BOLD_12 : FontID.PLAIN_12);
 			}
 		}
 		return true;

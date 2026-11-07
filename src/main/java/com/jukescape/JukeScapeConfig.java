@@ -30,7 +30,7 @@ public interface JukeScapeConfig extends Config
 	@ConfigItem(
 		keyName = "crossfade",
 		name = "Fade time",
-		description = "How long to fade out the old track and fade in the new one.",
+		description = "How long the old song and the new one crossfade for. 0 switches instantly.",
 		position = 2
 	)
 	default int crossfade()

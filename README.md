@@ -40,7 +40,7 @@ Files live in `%USERPROFILE%\.runelite\music-replacer`, the same folder the orig
 ### Config
 
 - **Replacement volume**: remixes are much louder than the in-game MIDI, so they play at 70% by default
-- **Fade time**: default 800 ms
+- **Fade time**: how long songs crossfade when the music changes, default 800 ms. Songs in different sample rates (say a 44.1 kHz mp3 and a 48 kHz opus) can't be mixed, so those fade out and then in instead
 
 ## YouTube add-on (developer mode only)
 

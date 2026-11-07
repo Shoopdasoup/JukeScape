@@ -74,6 +74,17 @@ final class AudioEngine implements Runnable
 	private float fade;
 	private float gain;
 
+	/**
+	 * The song fading out under the new one during a crossfade, or null. Its decoded audio is buffered in
+	 * {@link #outBuf}, because decoders return chunks of any size and the two songs are mixed sample by sample.
+	 */
+	private PcmSource outgoing;
+	private volatile Path outgoingPath;
+	private float outFade;
+	private final byte[] outChunk = new byte[CHUNK_BYTES];
+	private final byte[] outBuf = new byte[CHUNK_BYTES * 2];
+	private int outLen;
+
 	AudioEngine(Consumer<Path> onError)
 	{
 		this.onError = onError;
@@ -83,8 +94,8 @@ final class AudioEngine implements Runnable
 	}
 
 	/**
-	 * Fades out whatever is playing and then starts {@code playlist}, which loops. If the song that's playing is in
-	 * the new playlist it just carries on, so adding songs or toggling shuffle doesn't restart it. Never blocks.
+	 * Crossfades from whatever is playing into {@code playlist}, which loops. If the song that's playing is in the
+	 * new playlist it just carries on, so adding songs or toggling shuffle doesn't restart it. Never blocks.
 	 */
 	void play(List<Path> playlist, boolean shuffle)
 	{
@@ -136,7 +147,8 @@ final class AudioEngine implements Runnable
 	void release(Path path)
 	{
 		Path playing = current;
-		if (playing == null || (path != null && !path.equals(playing)))
+		Path fading = outgoingPath;
+		if ((playing == null && fading == null) || (path != null && !path.equals(playing) && !path.equals(fading)))
 		{
 			return;
 		}
@@ -191,6 +203,7 @@ final class AudioEngine implements Runnable
 		}
 
 		closeSource();
+		closeOutgoing();
 		closeLine(false);
 		complete(next);
 		complete(pending.getAndSet(null));
@@ -212,6 +225,11 @@ final class AudioEngine implements Runnable
 				next = null;
 				request.done.complete(null);
 			}
+			else if (!request.immediate && crossfadeTo(request))
+			{
+				next = null;
+				request.done.complete(null);
+			}
 		}
 
 		// Switch once the current track has faded out (or right away if nothing is playing)
@@ -226,12 +244,14 @@ final class AudioEngine implements Runnable
 			skipRequested = false;
 			if (source != null && next == null)
 			{
-				closeSource();
-				line.flush();
+				// Crossfade into the next song
+				startOutgoing();
 				emptySongs = 0;
 				openNext();
+				fade = 0f;
 				if (source == null)
 				{
+					closeOutgoing();
 					closeLine(false);
 				}
 				return;
@@ -240,6 +260,7 @@ final class AudioEngine implements Runnable
 
 		if (source == null)
 		{
+			closeOutgoing();
 			LockSupport.park(this);
 			return;
 		}
@@ -264,8 +285,119 @@ final class AudioEngine implements Runnable
 
 		sourceBytes += n;
 		AudioFormat format = source.format();
-		applyGain(buf, n, format.getChannels(), format.getSampleRate(), next == null ? 1f : 0f);
+		int outBytes = outgoingAvailable(n);
+		mix(buf, n, outBytes, format.getChannels(), format.getSampleRate(), next == null ? 1f : 0f);
+		consumeOutgoing(outBytes);
 		line.write(buf, 0, n);
+	}
+
+	/**
+	 * Starts the request's playlist while the current song fades out underneath it. Only possible when both are
+	 * decoded in the same format, since mixing doesn't resample; otherwise the caller falls back to fading out first.
+	 *
+	 * @return true if the crossfade started
+	 */
+	private boolean crossfadeTo(Request request)
+	{
+		if (source == null || line == null || request.playlist == null || request.playlist.isEmpty())
+		{
+			return false;
+		}
+		int start = request.shuffle ? ThreadLocalRandom.current().nextInt(request.playlist.size()) : 0;
+		Path path = request.playlist.get(start);
+		PcmSource opened;
+		try
+		{
+			opened = PcmSource.open(path);
+		}
+		catch (Exception e)
+		{
+			return false; // Fading out first opens it again, and reports and skips it if it's broken
+		}
+		if (!line.getFormat().matches(opened.format()))
+		{
+			PcmSource.closeQuietly(opened);
+			return false;
+		}
+
+		startOutgoing();
+		source = opened;
+		current = path;
+		sourceBytes = 0;
+		fade = 0f;
+		playlist = request.playlist;
+		shuffle = request.shuffle;
+		index = start;
+		emptySongs = 0;
+		return true;
+	}
+
+	/**
+	 * Moves the playing song to the outgoing slot, to fade out from its current level. A song already fading out is
+	 * cut, which is quiet by then.
+	 */
+	private void startOutgoing()
+	{
+		closeOutgoing();
+		outgoing = source;
+		outgoingPath = current;
+		outFade = fade;
+		source = null;
+		current = null;
+	}
+
+	/**
+	 * Buffers up to {@code want} bytes of the outgoing song.
+	 *
+	 * @return how many are buffered, less than {@code want} once it runs out
+	 */
+	private int outgoingAvailable(int want)
+	{
+		while (outgoing != null && outLen < want)
+		{
+			int r;
+			try
+			{
+				r = outgoing.read(outChunk);
+			}
+			catch (Exception e)
+			{
+				r = -1;
+			}
+			if (r <= 0)
+			{
+				// Its end; mix what's buffered, then it's done
+				PcmSource.closeQuietly(outgoing);
+				outgoing = null;
+				break;
+			}
+			int copy = Math.min(r, outBuf.length - outLen);
+			System.arraycopy(outChunk, 0, outBuf, outLen, copy);
+			outLen += copy;
+		}
+		return Math.min(want, outLen);
+	}
+
+	private void consumeOutgoing(int bytes)
+	{
+		if (bytes > 0)
+		{
+			System.arraycopy(outBuf, bytes, outBuf, 0, outLen - bytes);
+			outLen -= bytes;
+		}
+		if (outFade <= 0f || (outgoing == null && outLen == 0))
+		{
+			closeOutgoing();
+		}
+	}
+
+	private void closeOutgoing()
+	{
+		PcmSource.closeQuietly(outgoing);
+		outgoing = null;
+		outgoingPath = null;
+		outLen = 0;
+		outFade = 0f;
 	}
 
 	private void swap()
@@ -274,6 +406,7 @@ final class AudioEngine implements Runnable
 		next = null;
 
 		closeSource();
+		closeOutgoing();
 		if (request.immediate && line != null)
 		{
 			line.flush();
@@ -349,6 +482,8 @@ final class AudioEngine implements Runnable
 			return;
 		}
 
+		// A song in another format can't be mixed with the one fading out, so that one just stops
+		closeOutgoing();
 		closeLine(false);
 		int frameSize = format.getFrameSize();
 		int bufferBytes = (int) (format.getFrameRate() * LINE_BUFFER_MS / 1000) * frameSize;
@@ -380,10 +515,11 @@ final class AudioEngine implements Runnable
 	}
 
 	/**
-	 * Scales 16-bit little-endian samples in place, ramping the fade envelope and volume per frame so changes never
-	 * click.
+	 * Scales 16-bit little-endian samples in place and mixes in the first {@code outBytes} bytes of the outgoing
+	 * song, ramping the fades and volume per frame so changes never click. Fades follow an equal-power curve, so a
+	 * crossfade doesn't dip in loudness halfway through.
 	 */
-	private void applyGain(byte[] buf, int len, int channels, float sampleRate, float fadeTarget)
+	private void mix(byte[] buf, int len, int outBytes, int channels, float sampleRate, float fadeTarget)
 	{
 		float targetGain = volume;
 		float fadeStep = 1f / Math.max(1f, fadeMs * sampleRate / 1000f);
@@ -394,14 +530,38 @@ final class AudioEngine implements Runnable
 		{
 			fade = approach(fade, fadeTarget, fadeStep);
 			gain = approach(gain, targetGain, gainStep);
-			float g = fade * gain;
+			boolean mixOut = i + frameBytes <= outBytes;
+			if (mixOut)
+			{
+				outFade = approach(outFade, 0f, fadeStep);
+			}
+			float in = curve(fade);
+			float out = mixOut ? curve(outFade) : 0f;
 			for (int j = i, end = i + frameBytes; j < end; j += 2)
 			{
-				int sample = (int) ((short) ((buf[j] & 0xff) | (buf[j + 1] << 8)) * g);
-				buf[j] = (byte) sample;
-				buf[j + 1] = (byte) (sample >> 8);
+				float sample = sample(buf, j) * in;
+				if (mixOut)
+				{
+					sample += sample(outBuf, j) * out;
+				}
+				int s = Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(sample * gain)));
+				buf[j] = (byte) s;
+				buf[j + 1] = (byte) (s >> 8);
 			}
 		}
+	}
+
+	private static int sample(byte[] buf, int i)
+	{
+		return (short) ((buf[i] & 0xff) | (buf[i + 1] << 8));
+	}
+
+	/**
+	 * Equal-power fade curve: two songs crossfading at {@code f} and {@code 1 - f} keep the same total power.
+	 */
+	private static float curve(float f)
+	{
+		return (float) Math.sin(f * Math.PI / 2);
 	}
 
 	private static float approach(float value, float target, float step)

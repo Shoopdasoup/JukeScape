@@ -8,6 +8,7 @@ import net.runelite.api.Client;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
 /**
@@ -18,7 +19,7 @@ import net.runelite.client.util.Text;
  * <ol>
  * <li>"Descend" shows "You jump further into the burrow..." and fades the screen to black</li>
  * <li>about 2 s later, on arrival, the chat says "Delve level: N" while the screen is still black</li>
- * <li>about 1 s after that the screen fades back in (the fade overlay closes)</li>
+ * <li>a tick or so after that the screen starts fading back in</li>
  * <li>about 2 s after that the Doom appears and {@link #LEVELS_CLEARED_VARP} catches up</li>
  * </ol>
  * The song changes at 3 or 4, as the profile's {@link #SWITCH} option says. Either way the var is what it settles
@@ -36,7 +37,7 @@ final class DelveMode implements BossMode
 	static final String SWITCH_ON_ARRIVAL = "arrival";
 	static final String SWITCH_ON_SPAWN = "spawn";
 	static final Option SWITCH = new Option("switch", "Song changes", List.of(
-		new Choice(SWITCH_ON_ARRIVAL, "On arrival", "When the screen fades in on the new delve"),
+		new Choice(SWITCH_ON_ARRIVAL, "On arrival", "As the screen starts fading in on the new delve"),
 		new Choice(SWITCH_ON_SPAWN, "When the Doom appears", "A few seconds after arriving, when the fight starts")));
 
 	private static final Pattern ARRIVAL_MESSAGE = Pattern.compile("Delve level: (\\d+)");
@@ -112,12 +113,19 @@ final class DelveMode implements BossMode
 	}
 
 	/**
-	 * Whether the screen has faded back in since the arrival message. The fade overlay closes and reopens on the
-	 * arrival tick itself, so it only counts from the tick after.
+	 * Whether the screen has started fading back in since the arrival message: its black layer is no longer fully
+	 * opaque, or the fade overlay has closed. Confirmed in game: the layer is opaque (0) the tick after arriving,
+	 * about 150 the next as it fades, then gone; the overlay itself sometimes lingers, invisible, for a few more
+	 * ticks. The overlay closes and reopens on the arrival tick itself, so this only counts from the tick after.
 	 */
 	private boolean fadedIn(Client client)
 	{
-		return client.getTickCount() > arrivalTick && client.getWidget(InterfaceID.FadeOverlay.UNIVERSE) == null;
+		if (client.getTickCount() <= arrivalTick)
+		{
+			return false;
+		}
+		Widget fader = client.getWidget(InterfaceID.FadeOverlay.FADER);
+		return client.getWidget(InterfaceID.FadeOverlay.UNIVERSE) == null || (fader != null && fader.getOpacity() > 0);
 	}
 
 	@Override

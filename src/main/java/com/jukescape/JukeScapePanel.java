@@ -430,9 +430,12 @@ final class JukeScapePanel extends PluginPanel
 		String current = entry.slotSpecs.getOrDefault(name, "");
 		Object answer = JOptionPane.showInputDialog(this,
 			"<html>Which " + noun + "s should <b>" + escapeHtml(name) + "</b> play on?<br><br>"
-				+ "Like printing pages: <b>1-4</b>, <b>1, 2, 4</b> or <b>9+</b> (9 and up).<br>"
-				+ "A " + noun + " no song is set for keeps the previous " + noun + "'s song.<br>"
-				+ "Leave it empty to use its place in the list (" + noun + " " + (index + 1) + ").</html>",
+				+ "Examples:<br>"
+				+ "&nbsp;&nbsp;<b>1-4</b> &nbsp;" + noun + "s 1 to 4<br>"
+				+ "&nbsp;&nbsp;<b>1, 2, 4</b> &nbsp;just those " + noun + "s<br>"
+				+ "&nbsp;&nbsp;<b>9+</b> &nbsp;" + noun + " 9 and deeper<br><br>"
+				+ "Any " + noun + " without a song keeps playing the one before it.<br>"
+				+ "Leave this empty to play it on " + noun + " " + (index + 1) + ", its place in the list.</html>",
 			"JukeScape", JOptionPane.PLAIN_MESSAGE, null, null, current);
 		if (answer == null || answer.toString().trim().equals(current))
 		{

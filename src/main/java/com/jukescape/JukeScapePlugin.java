@@ -26,6 +26,7 @@ import net.runelite.api.FontID;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
@@ -388,6 +389,18 @@ public class JukeScapePlugin extends Plugin
 		if (trackListDirty)
 		{
 			trackListDirty = !setTrackListFonts(true);
+		}
+	}
+
+	/**
+	 * Boss modes can switch songs on what the game says, ahead of its state updating.
+	 */
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		for (BossMode mode : BossMode.ALL)
+		{
+			mode.onChatMessage(event, client);
 		}
 	}
 

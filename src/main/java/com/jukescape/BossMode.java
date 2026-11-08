@@ -2,6 +2,7 @@ package com.jukescape;
 
 import java.util.List;
 import net.runelite.api.Client;
+import net.runelite.api.events.ChatMessage;
 
 /**
  * A play mode made for one boss fight: the track's songs are split into named slots (delve levels, phases, ...), and
@@ -51,6 +52,14 @@ interface BossMode
 	 * (a var read, not a widget search). Runs on the client thread.
 	 */
 	int activeSlot(Client client);
+
+	/**
+	 * Lets a mode react to what the game says in the chatbox, e.g. to switch songs on a message before the game's
+	 * own state catches up. Called for every chat message, on the client thread.
+	 */
+	default void onChatMessage(ChatMessage message, Client client)
+	{
+	}
 
 	default boolean appliesTo(String track)
 	{

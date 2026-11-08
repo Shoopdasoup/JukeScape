@@ -89,6 +89,7 @@ public class JukeScapePlugin extends Plugin
 	private volatile NavigationButton navButton;
 	private final List<ReplacementSource> sources = new CopyOnWriteArrayList<>();
 	private volatile float volumeScale;
+	private volatile boolean advanced;
 	private File lastChooserDir;
 	/**
 	 * The track whose replacement is playing, for the panel, or null.
@@ -207,6 +208,26 @@ public class JukeScapePlugin extends Plugin
 	{
 		volumeScale = config.volume() / 100f;
 		engine.setFadeMs(config.crossfade());
+		advanced = config.advanced();
+	}
+
+	/**
+	 * Whether the panel shows advanced options. Safe from any thread.
+	 */
+	boolean advanced()
+	{
+		return advanced;
+	}
+
+	void setSlotSpec(String track, Path song, String spec)
+	{
+		runIo("set which " + (spec == null ? "levels" : "levels " + spec) + " " + Library.songName(song) + " plays on",
+			() -> library.setSlotSpec(track, song, spec));
+	}
+
+	void setOption(String track, String key, String value)
+	{
+		runIo("change " + track + "'s settings", () -> library.setOption(track, key, value));
 	}
 
 	public void addReplacementSource(ReplacementSource source)
@@ -336,7 +357,7 @@ public class JukeScapePlugin extends Plugin
 		}
 
 		// A boss mode picks one song by how far into the fight the player is. Only a var read, so fine every frame.
-		int slot = active != null && active.bossMode != null ? active.bossMode.activeSlot(client) : -1;
+		int slot = active != null && active.bossMode != null ? active.bossMode.activeSlot(client, active) : -1;
 		changed |= slot != lastSlot;
 		lastSlot = slot;
 
@@ -349,7 +370,7 @@ public class JukeScapePlugin extends Plugin
 			{
 				if (slot >= 0)
 				{
-					engine.play(List.of(active.files.get(BossMode.songFor(slot, active.files.size()))), false);
+					engine.play(SlotPlan.songsFor(slot, active), false);
 				}
 				else
 				{

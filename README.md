@@ -23,7 +23,10 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
 - **Play modes:** the track's **Mode** button in the side panel (or **Playlist → Play mode** in game) plays the songs in order or shuffled. Some boss tracks also get a mode of their own:
-  - **Delve** (The Doom, for the Doom of Mokhaiotl): a song for each delve level. Song 1 plays on level 1, song 2 on level 2, and so on, as deep as you like: give it 16 songs and levels 9–16 each get their own. The last song covers every level deeper than your list goes.
+  - **Delve** (The Doom, for the Doom of Mokhaiotl): a song for each delve level. Song 1 plays on level 1, song 2 on level 2, and so on, as deep as you like: give it 16 songs and levels 9–16 each get their own. The last song covers every level deeper than your list goes. The song changes as the screen fades in on the new level.
+- **Advanced options** (in JukeScape's settings) adds more controls to the side panel. For Delve:
+  - **Song changes**: on arrival, or when the Doom appears.
+  - **Which levels each song plays on**: click a song and enter levels like printing pages, e.g. `1-4`, `1, 2, 4` or `9+`. A level with no song keeps the previous level's song, so four songs can cover every delve. Several songs on one level play in turn.
 - **Profiles:** give a track several playlists and switch between them without losing any, from the track's **Profile** button in the side panel or **Playlist → Switch profile / New profile** in game. A new profile starts empty, and an empty profile plays the game's own music.
 - **Everything else:** right-click the music tab icon → **Music replacements**:
   - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it

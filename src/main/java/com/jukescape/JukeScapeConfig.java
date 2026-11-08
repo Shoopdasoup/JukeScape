@@ -37,4 +37,16 @@ public interface JukeScapeConfig extends Config
 	{
 		return 800;
 	}
+
+	@ConfigItem(
+		keyName = "advanced",
+		name = "Advanced options",
+		description = "Show extra settings in the JukeScape side panel, like which delve levels each song plays on.<br>"
+			+ "Settings you've made keep working when this is off.",
+		position = 3
+	)
+	default boolean advanced()
+	{
+		return false;
+	}
 }

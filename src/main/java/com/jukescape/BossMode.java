@@ -5,15 +5,16 @@ import net.runelite.api.Client;
 import net.runelite.api.events.ChatMessage;
 
 /**
- * A play mode made for one boss fight: the track's songs are split into named slots (delve levels, phases, ...), and
- * the song for whichever slot the fight is in plays. Song N plays in slot N; if there are fewer songs than slots, the
- * last song covers the rest, so the player decides how many songs to give it.
+ * A play mode made for one boss fight: the fight is split into slots (delve levels, phases, ...), and the songs for
+ * whichever slot the fight is in play. Which songs go in which slots is the player's call, see {@link SlotPlan}.
  * <p>
  * Each boss gets its own implementation, listed in {@link #ALL}. Everything boss-specific stays in that class.
  */
 interface BossMode
 {
 	List<BossMode> ALL = List.of(new DelveMode());
+
+	int UNLIMITED = Integer.MAX_VALUE;
 
 	/**
 	 * Saved in a profile's {@value Library#MODE_MARKER} file. Never change it once released.
@@ -40,22 +41,37 @@ interface BossMode
 	 */
 	int slotCount();
 
-	int UNLIMITED = Integer.MAX_VALUE;
+	/**
+	 * What a slot is called, e.g. "Level" or "Phase".
+	 */
+	String slotNoun();
 
 	/**
 	 * A slot's name, e.g. "Level 1" for slot 0.
 	 */
-	String slotName(int slot);
+	default String slotName(int slot)
+	{
+		return slotNoun() + " " + (slot + 1);
+	}
 
 	/**
-	 * Which slot the fight is in, from 0. Called every client frame while the mode is playing, so it must be cheap
-	 * (a var read, not a widget search). Runs on the client thread.
+	 * Which slot the fight is in, from 0. Called every client frame while the mode is playing, so it must be cheap.
+	 * Runs on the client thread.
+	 *
+	 * @param entry the profile playing, for its {@link #options()}
 	 */
-	int activeSlot(Client client);
+	int activeSlot(Client client, Library.Entry entry);
 
 	/**
-	 * Lets a mode react to what the game says in the chatbox, e.g. to switch songs on a message before the game's
-	 * own state catches up. Called for every chat message, on the client thread.
+	 * Settings the mode offers per profile, shown as advanced options in the panel.
+	 */
+	default List<Option> options()
+	{
+		return List.of();
+	}
+
+	/**
+	 * Lets a mode react to what the game says in the chatbox. Called for every chat message, on the client thread.
 	 */
 	default void onChatMessage(ChatMessage message, Client client)
 	{
@@ -84,23 +100,49 @@ interface BossMode
 	}
 
 	/**
-	 * Which song plays in {@code slot}, given {@code songs} songs.
+	 * A per-profile setting with a few choices. The first choice is the default.
 	 */
-	static int songFor(int slot, int songs)
+	final class Option
 	{
-		return Math.max(0, Math.min(slot, songs - 1));
+		final String key;
+		final String label;
+		final List<Choice> choices;
+
+		Option(String key, String label, List<Choice> choices)
+		{
+			this.key = key;
+			this.label = label;
+			this.choices = choices;
+		}
+
+		/**
+		 * The choice {@code entry}'s profile has, or the default.
+		 */
+		Choice current(Library.Entry entry)
+		{
+			String value = entry.options.get(key);
+			for (Choice choice : choices)
+			{
+				if (choice.value.equals(value))
+				{
+					return choice;
+				}
+			}
+			return choices.get(0);
+		}
 	}
 
-	/**
-	 * What a song covers, for the panel: "Level 3", "Level 6 onward" for the last song when it covers several
-	 * slots, or "Unused" when there are more songs than slots.
-	 */
-	default String slotLabel(int song, int songs)
+	final class Choice
 	{
-		if (song >= slotCount())
+		final String value;
+		final String label;
+		final String description;
+
+		Choice(String value, String label, String description)
 		{
-			return "Unused";
+			this.value = value;
+			this.label = label;
+			this.description = description;
 		}
-		return song == songs - 1 && songs < slotCount() ? slotName(song) + " onward" : slotName(song);
 	}
 }

@@ -1,6 +1,8 @@
 package com.jukescape;
 
 import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -50,6 +53,19 @@ final class Library
 	 * In a playlist or profile folder, holds the id of the {@link BossMode} it plays in. Takes priority over shuffle.
 	 */
 	static final String MODE_MARKER = ".mode";
+	/**
+	 * In a playlist or profile folder, which boss mode slots each song plays in (song name = spec, see
+	 * {@link SlotPlan}).
+	 */
+	static final String SLOTS_FILE = ".slots";
+	/**
+	 * In a playlist or profile folder, the boss mode's options (key = value).
+	 */
+	static final String OPTIONS_FILE = ".options";
+	/**
+	 * Settings files that belong to a playlist or profile folder and move with its songs.
+	 */
+	private static final List<String> SETTINGS_FILES = List.of(".shuffle", ".mode", ".slots", ".options");
 	static final String MODE_IN_ORDER = "in-order";
 	static final String MODE_SHUFFLE = "shuffle";
 	/**
@@ -88,6 +104,14 @@ final class Library
 		 */
 		final BossMode bossMode;
 		/**
+		 * Song name to the boss mode slots it plays in, for songs the player set them for.
+		 */
+		final Map<String, String> slotSpecs;
+		/**
+		 * The boss mode's options for this profile.
+		 */
+		final Map<String, String> options;
+		/**
 		 * The folder the active profile's songs are in, or null for a single file.
 		 */
 		final Path dir;
@@ -105,14 +129,17 @@ final class Library
 		final boolean layered;
 		private final List<Long> modified;
 
-		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, BossMode bossMode, Path dir,
-			String profile, List<String> profiles, boolean layered)
+		Entry(String track, List<Path> files, List<Long> modified, boolean shuffle, BossMode bossMode,
+			Map<String, String> slotSpecs, Map<String, String> options, Path dir, String profile, List<String> profiles,
+			boolean layered)
 		{
 			this.track = track;
 			this.files = Collections.unmodifiableList(files);
 			this.modified = modified;
 			this.shuffle = shuffle;
 			this.bossMode = bossMode;
+			this.slotSpecs = Collections.unmodifiableMap(slotSpecs);
+			this.options = Collections.unmodifiableMap(options);
 			this.dir = dir;
 			this.profile = profile;
 			this.profiles = Collections.unmodifiableList(profiles);
@@ -141,14 +168,14 @@ final class Library
 			}
 			Entry other = (Entry) o;
 			return track.equals(other.track) && files.equals(other.files) && modified.equals(other.modified)
-				&& shuffle == other.shuffle && bossMode == other.bossMode && profile.equals(other.profile)
-				&& profiles.equals(other.profiles);
+				&& shuffle == other.shuffle && bossMode == other.bossMode && slotSpecs.equals(other.slotSpecs)
+				&& options.equals(other.options) && profile.equals(other.profile) && profiles.equals(other.profiles);
 		}
 
 		@Override
 		public int hashCode()
 		{
-			return Objects.hash(track, files, modified, shuffle, bossMode, profile, profiles);
+			return Objects.hash(track, files, modified, shuffle, bossMode, slotSpecs, options, profile, profiles);
 		}
 	}
 
@@ -300,7 +327,103 @@ final class Library
 		}
 		BossMode bossMode = songsDir == null ? null : bossMode(songsDir, track);
 		boolean shuffle = bossMode == null && songsDir != null && Files.exists(songsDir.resolve(SHUFFLE_MARKER));
-		return new Entry(track, files, modified, shuffle, bossMode, songsDir, profile, profiles, !profileDirs.isEmpty());
+		Map<String, String> slotSpecs = songsDir == null ? Map.of() : readSettings(songsDir.resolve(SLOTS_FILE));
+		Map<String, String> options = songsDir == null ? Map.of() : readSettings(songsDir.resolve(OPTIONS_FILE));
+		return new Entry(track, files, modified, shuffle, bossMode, slotSpecs, options, songsDir, profile, profiles,
+			!profileDirs.isEmpty());
+	}
+
+	private static Map<String, String> readSettings(Path file)
+	{
+		if (!Files.isRegularFile(file))
+		{
+			return Map.of();
+		}
+		Properties props = new Properties();
+		try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8))
+		{
+			props.load(reader);
+		}
+		catch (IOException | IllegalArgumentException e)
+		{
+			log.warn("Couldn't read {}", file, e);
+			return Map.of();
+		}
+		Map<String, String> settings = new HashMap<>();
+		for (String key : props.stringPropertyNames())
+		{
+			settings.put(key, props.getProperty(key));
+		}
+		return settings;
+	}
+
+	/**
+	 * Sets ({@code value} non-null) or clears one setting in a settings file, deleting the file once it's empty.
+	 */
+	private static void writeSetting(Path file, String key, String value) throws IOException
+	{
+		Map<String, String> settings = new HashMap<>(readSettings(file));
+		if (value == null)
+		{
+			settings.remove(key);
+		}
+		else
+		{
+			settings.put(key, value);
+		}
+		if (settings.isEmpty())
+		{
+			Files.deleteIfExists(file);
+			return;
+		}
+		Properties props = new Properties();
+		props.putAll(settings);
+		try (Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8))
+		{
+			props.store(writer, null);
+		}
+	}
+
+	/**
+	 * Sets which boss mode slots a song plays in, e.g. "1-4" or "1, 2, 4". Null or blank goes back to its position.
+	 *
+	 * @throws IOException with a message for players if the spec isn't valid
+	 */
+	synchronized void setSlotSpec(String track, Path song, String spec) throws IOException
+	{
+		Entry entry = get(track);
+		if (entry == null || entry.dir == null || !entry.files.contains(song))
+		{
+			return;
+		}
+		String clean = null;
+		if (spec != null && !spec.isBlank())
+		{
+			try
+			{
+				clean = SlotPlan.normalize(spec);
+			}
+			catch (IllegalArgumentException e)
+			{
+				throw new IOException(e.getMessage());
+			}
+		}
+		writeSetting(entry.dir.resolve(SLOTS_FILE), songName(song), clean);
+		rescan();
+	}
+
+	/**
+	 * Sets one of the active profile's boss mode options.
+	 */
+	synchronized void setOption(String track, String key, String value) throws IOException
+	{
+		Entry entry = get(track);
+		if (entry == null || entry.dir == null)
+		{
+			return;
+		}
+		writeSetting(entry.dir.resolve(OPTIONS_FILE), key, value);
+		rescan();
 	}
 
 	/**
@@ -517,6 +640,7 @@ final class Library
 		engine.release(file);
 		Files.deleteIfExists(file);
 		Path dir = file.getParent();
+		writeSetting(dir.resolve(SLOTS_FILE), songName(file), null);
 		// An emptied playlist goes, but an emptied profile stays, playing the game's music until it gets songs
 		if (DIR.equals(dir.getParent()) && songs(dir).isEmpty() && profileDirs(dir).isEmpty())
 		{
@@ -807,7 +931,7 @@ final class Library
 			String ext = extension(song.getFileName().toString());
 			Files.move(song, main.resolve(nextSongName(main, songName(song), ext)));
 		}
-		for (String setting : List.of(SHUFFLE_MARKER, MODE_MARKER))
+		for (String setting : SETTINGS_FILES)
 		{
 			Path marker = dir.resolve(setting);
 			if (Files.exists(marker))
@@ -881,8 +1005,10 @@ final class Library
 		{
 			Files.deleteIfExists(song);
 		}
-		Files.deleteIfExists(dir.resolve(SHUFFLE_MARKER));
-		Files.deleteIfExists(dir.resolve(MODE_MARKER));
+		for (String setting : SETTINGS_FILES)
+		{
+			Files.deleteIfExists(dir.resolve(setting));
+		}
 		try
 		{
 			Files.deleteIfExists(dir);

@@ -58,6 +58,7 @@ final class JukeScapePanel extends PluginPanel
 	private int shownVersion = -1;
 	private String shownTrack;
 	private Path shownSong;
+	private boolean shownAdvanced;
 
 	JukeScapePanel(JukeScapePlugin plugin, Library library, AudioEngine engine)
 	{
@@ -154,7 +155,8 @@ final class JukeScapePanel extends PluginPanel
 	{
 		String track = plugin.nowPlayingTrack();
 		Path song = track == null ? null : engine.currentSong();
-		if (library.version() != shownVersion || !Objects.equals(track, shownTrack) || !Objects.equals(song, shownSong))
+		if (library.version() != shownVersion || !Objects.equals(track, shownTrack) || !Objects.equals(song, shownSong)
+			|| plugin.advanced() != shownAdvanced)
 		{
 			rebuild();
 		}
@@ -165,6 +167,7 @@ final class JukeScapePanel extends PluginPanel
 		shownVersion = library.version();
 		shownTrack = plugin.nowPlayingTrack();
 		shownSong = shownTrack == null ? null : engine.currentSong();
+		shownAdvanced = plugin.advanced();
 		showNowPlaying(shownTrack, shownSong);
 
 		String filter = search.getText().trim().toLowerCase(Locale.ROOT);
@@ -260,6 +263,13 @@ final class JukeScapePanel extends PluginPanel
 			body.setOpaque(false);
 			body.setBorder(new EmptyBorder(0, 8, 8, 8));
 			body.add(profileButton(entry));
+			if (shownAdvanced && entry.bossMode != null)
+			{
+				for (BossMode.Option option : entry.bossMode.options())
+				{
+					body.add(optionButton(entry, option));
+				}
+			}
 			for (int i = 0; i < songs; i++)
 			{
 				body.add(songRow(entry, i, playing));
@@ -283,12 +293,26 @@ final class JukeScapePanel extends PluginPanel
 
 		JPanel row = new JPanel(new BorderLayout(4, 0));
 		row.setOpaque(false);
-		// In a boss mode the position is what decides when a song plays, so say that instead of a number
-		String position = entry.bossMode != null ? entry.bossMode.slotLabel(index, entry.files.size()) + ": " : (index + 1) + ". ";
+		// In a boss mode, say when the song plays instead of its number
+		String position = entry.bossMode != null ? SlotPlan.label(index, entry) + ": " : (index + 1) + ". ";
 		JLabel label = new JLabel(position + name);
 		label.setFont(FontManager.getRunescapeSmallFont());
 		label.setForeground(trackPlaying && song.equals(shownSong) ? ColorScheme.BRAND_ORANGE : ColorScheme.TEXT_COLOR);
 		label.setToolTipText(position + name);
+		if (shownAdvanced && entry.bossMode != null)
+		{
+			String noun = entry.bossMode.slotNoun().toLowerCase();
+			label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+			label.setToolTipText(position + name + " (click to choose which " + noun + "s it plays on)");
+			label.addMouseListener(new MouseAdapter()
+			{
+				@Override
+				public void mouseClicked(MouseEvent e)
+				{
+					chooseSlots(entry, song, index);
+				}
+			});
+		}
 		row.add(label, BorderLayout.CENTER);
 
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 3, 0));
@@ -394,6 +418,75 @@ final class JukeScapePanel extends PluginPanel
 			menu.show(button, 0, button.getHeight());
 		});
 		return button;
+	}
+
+	/**
+	 * Asks which slots (e.g. delve levels) a song plays on, written like page ranges.
+	 */
+	private void chooseSlots(Library.Entry entry, Path song, int index)
+	{
+		String noun = entry.bossMode.slotNoun().toLowerCase();
+		String name = Library.songName(song);
+		String current = entry.slotSpecs.getOrDefault(name, "");
+		Object answer = JOptionPane.showInputDialog(this,
+			"<html>Which " + noun + "s should <b>" + escapeHtml(name) + "</b> play on?<br><br>"
+				+ "Like printing pages: <b>1-4</b>, <b>1, 2, 4</b> or <b>9+</b> (9 and up).<br>"
+				+ "A " + noun + " no song is set for keeps the previous " + noun + "'s song.<br>"
+				+ "Leave it empty to use its place in the list (" + noun + " " + (index + 1) + ").</html>",
+			"JukeScape", JOptionPane.PLAIN_MESSAGE, null, null, current);
+		if (answer == null || answer.toString().trim().equals(current))
+		{
+			return;
+		}
+		String spec = answer.toString().trim();
+		if (!spec.isEmpty())
+		{
+			try
+			{
+				SlotPlan.parse(spec);
+			}
+			catch (IllegalArgumentException e)
+			{
+				JOptionPane.showMessageDialog(this, "That didn't work: " + e.getMessage() + ".", "JukeScape",
+					JOptionPane.WARNING_MESSAGE);
+				chooseSlots(entry, song, index);
+				return;
+			}
+		}
+		plugin.setSlotSpec(entry.track, song, spec.isEmpty() ? null : spec);
+	}
+
+	/**
+	 * A boss mode setting: shows the current choice, and opens a menu of the others.
+	 */
+	private JButton optionButton(Library.Entry entry, BossMode.Option option)
+	{
+		BossMode.Choice current = option.current(entry);
+		JButton button = button(option.label + ": " + current.label);
+		button.setToolTipText(current.description);
+		button.addActionListener(e ->
+		{
+			JPopupMenu menu = new JPopupMenu();
+			ButtonGroup group = new ButtonGroup();
+			for (BossMode.Choice choice : option.choices)
+			{
+				JRadioButtonMenuItem item = new JRadioButtonMenuItem(choice.label, choice == current);
+				item.setToolTipText(choice.description);
+				group.add(item);
+				if (choice != current)
+				{
+					item.addActionListener(ev -> plugin.setOption(entry.track, option.key, choice.value));
+				}
+				menu.add(item);
+			}
+			menu.show(button, 0, button.getHeight());
+		});
+		return button;
+	}
+
+	private static String escapeHtml(String s)
+	{
+		return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 
 	/**

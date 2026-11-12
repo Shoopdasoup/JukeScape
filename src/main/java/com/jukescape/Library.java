@@ -42,7 +42,7 @@ final class Library
 	/**
 	 * Supported formats, most preferred first.
 	 */
-	static final List<String> EXTENSIONS = List.of(".opus", ".ogg", ".mp3", ".wav");
+	static final List<String> EXTENSIONS = List.of(".opus", ".ogg", ".mp3", ".flac", ".wav");
 
 	/**
 	 * Prefix of in-progress files, which the index ignores.

@@ -26,6 +26,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.FontID;
 import net.runelite.api.GameState;
+import net.runelite.api.MidiRequest;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.events.ChatMessage;
@@ -67,6 +68,11 @@ public class JukeScapePlugin extends Plugin
 	 * track keeps playing inaudibly, so restoring is just setting the volume back.
 	 */
 	private static final int MUTED_GAME_VOLUME = 1;
+	/**
+	 * How long after a replacement stops to watch for the game's next song starting, about 6 s. In game it started
+	 * within 2 s.
+	 */
+	private static final int RESTORE_TICKS = 10;
 	private static final int MUSIC_TAB = 13;
 	private static final int MENU_PAGE_SIZE = 4;
 	private static final int NAV_ICON_SIZE = 16;
@@ -111,6 +117,12 @@ public class JukeScapePlugin extends Plugin
 	 * The game's music volume from before we turned it down, or -1 if we haven't.
 	 */
 	private int savedGameVolume = -1;
+	/**
+	 * After a replacement stops, the game tick until which the game's music volume keeps being put back as the
+	 * game's next song starts, or -1.
+	 */
+	private int restoreUntilTick = -1;
+	private int restoreMidi;
 	private boolean trackListDirty = true;
 
 	@Provides
@@ -140,7 +152,7 @@ public class JukeScapePlugin extends Plugin
 			t.setDaemon(true);
 			return t;
 		});
-		engine = new AudioEngine(path -> chat("Couldn't play " + path.getFileName() + ", is it a valid opus/ogg/mp3/wav file?"));
+		engine = new AudioEngine(path -> chat("Couldn't play " + path.getFileName() + ", is it a valid opus/ogg/mp3/flac/wav file?"));
 		library = new Library(engine);
 		loadConfig();
 
@@ -394,18 +406,25 @@ public class JukeScapePlugin extends Plugin
 
 		if (active != null)
 		{
-			// Keep the game's own track inaudible. The game resets the volume whenever the settings change, so
-			// remember its latest value. At 0 the player muted music themselves and there's nothing to turn down.
-			int gameVolume = client.getMusicVolume();
-			if (gameVolume != MUTED_GAME_VOLUME && gameVolume != 0)
+			// Keep the game's own track inaudible. Reading the volume gives the player's setting, not what the track
+			// is playing at (confirmed in game: it reads 75 straight after turning the track down to 1), and the game
+			// puts the track back to the setting whenever its interface changes, like switching side tabs. So turn
+			// it down every frame. At 0 the player muted music themselves and there's nothing to turn down.
+			int setting = client.getMusicVolume();
+			if (setting != 0)
 			{
-				savedGameVolume = gameVolume;
+				if (setting != MUTED_GAME_VOLUME)
+				{
+					savedGameVolume = setting;
+				}
 				client.setMusicVolume(MUTED_GAME_VOLUME);
 			}
+			restoreUntilTick = -1;
 		}
 		else
 		{
 			restoreGameMusic();
+			keepRestoring();
 		}
 	}
 
@@ -702,7 +721,7 @@ public class JukeScapePlugin extends Plugin
 			JFileChooser chooser = new JFileChooser(lastChooserDir);
 			chooser.setDialogTitle(add ? "Add songs to " + track : "Replace " + track);
 			chooser.setMultiSelectionEnabled(true);
-			chooser.setFileFilter(new FileNameExtensionFilter("Audio files (opus, ogg, mp3, wav)", "opus", "ogg", "mp3", "wav"));
+			chooser.setFileFilter(new FileNameExtensionFilter("Audio files (opus, ogg, mp3, flac, wav)", "opus", "ogg", "mp3", "flac", "wav"));
 			if (chooser.showOpenDialog(client.getCanvas()) != JFileChooser.APPROVE_OPTION)
 			{
 				return;
@@ -780,7 +799,7 @@ public class JukeScapePlugin extends Plugin
 			{
 				chat("Replacements are in " + Library.DIR);
 			}
-			chat("Name opus/ogg/mp3/wav files exactly like the track (e.g. Sea Shanty 2.opus), or put several in a folder named "
+			chat("Name opus/ogg/mp3/flac/wav files exactly like the track (e.g. Sea Shanty 2.opus), or put several in a folder named "
 				+ "like the track for a playlist, then use Reload folder.");
 		});
 	}
@@ -809,12 +828,52 @@ public class JukeScapePlugin extends Plugin
 		{
 			return;
 		}
-		// Unless the game already set a new volume itself
-		if (client.getMusicVolume() == MUTED_GAME_VOLUME)
-		{
-			client.setMusicVolume(savedGameVolume);
-		}
+		// The player's setting still reads back while the track is turned down, so always put the track back to it,
+		// picking up any change made in the settings meanwhile. Only if it somehow reads as turned down, use the
+		// setting from before.
+		int setting = client.getMusicVolume();
+		client.setMusicVolume(setting == MUTED_GAME_VOLUME ? savedGameVolume : setting);
 		savedGameVolume = -1;
+		restoreUntilTick = client.getTickCount() + RESTORE_TICKS;
+		restoreMidi = midiPlaying();
+	}
+
+	/**
+	 * Setting the game's music volume only reaches the song already playing (confirmed in game), but when a
+	 * replacement stops, the game's next song starts a few seconds later, after the old one fades out, and would play
+	 * as quietly as the replacement left it. So for a while, put the volume back again whenever the game's songs
+	 * change, and once more at the end.
+	 */
+	private void keepRestoring()
+	{
+		if (restoreUntilTick < 0)
+		{
+			return;
+		}
+		int midi = midiPlaying();
+		boolean last = client.getTickCount() > restoreUntilTick;
+		if (midi != restoreMidi || last)
+		{
+			restoreMidi = midi;
+			client.setMusicVolume(client.getMusicVolume());
+		}
+		if (last)
+		{
+			restoreUntilTick = -1;
+		}
+	}
+
+	/**
+	 * Which of the game's songs are playing, as a hash: only compared, to see when they change.
+	 */
+	private int midiPlaying()
+	{
+		int hash = 1;
+		for (MidiRequest request : client.getActiveMidiRequests())
+		{
+			hash = hash * 31 + request.getArchiveId() * 2 + (request.isJingle() ? 1 : 0);
+		}
+		return hash;
 	}
 
 	private void setNowPlayingFont(boolean replaced)

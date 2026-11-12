@@ -65,6 +65,10 @@ interface PcmSource extends Closeable
 		{
 			return new Wav(path);
 		}
+		if (name.endsWith(".flac"))
+		{
+			return new Flac(path);
+		}
 		throw new IOException("Unsupported audio format: " + path.getFileName());
 	}
 
@@ -673,6 +677,82 @@ interface PcmSource extends Closeable
 		public void close() throws IOException
 		{
 			ogg.close();
+		}
+	}
+
+	/**
+	 * FLAC, mono or stereo, at any bit depth: deeper than 16 bits is cut down to 16 (inaudible at game volumes).
+	 */
+	final class Flac implements PcmSource
+	{
+		private final FlacDecoder decoder;
+		private final AudioFormat format;
+		private final int shift;
+		private int pos;
+
+		Flac(Path path) throws IOException
+		{
+			decoder = new FlacDecoder(new BufferedInputStream(Files.newInputStream(path), STREAM_BUFFER));
+			try
+			{
+				if (decoder.channels > 2)
+				{
+					throw new IOException(path.getFileName() + " has " + decoder.channels
+						+ " channels; only mono and stereo FLAC files are supported");
+				}
+				// Decode the first frame now, so a broken file fails here rather than once playing
+				if (!decoder.readFrame())
+				{
+					throw new IOException("No FLAC audio in " + path.getFileName());
+				}
+			}
+			catch (IOException e)
+			{
+				close();
+				throw e;
+			}
+			shift = decoder.bitsPerSample - 16;
+			format = new AudioFormat(decoder.sampleRate, 16, decoder.channels, true, false);
+		}
+
+		@Override
+		public AudioFormat format()
+		{
+			return format;
+		}
+
+		@Override
+		public int read(byte[] buf) throws IOException
+		{
+			int channels = decoder.channels;
+			int frameBytes = 2 * channels;
+			int len = 0;
+			while (len + frameBytes <= buf.length)
+			{
+				if (pos >= decoder.blockSize)
+				{
+					if (!decoder.readFrame())
+					{
+						break;
+					}
+					pos = 0;
+				}
+				for (int ch = 0; ch < channels; ch++)
+				{
+					long sample = decoder.samples[ch][pos];
+					int s = (int) (shift >= 0 ? sample >> shift : sample << -shift);
+					buf[len++] = (byte) s;
+					buf[len++] = (byte) (s >> 8);
+				}
+				pos++;
+			}
+			return len == 0 ? -1 : len;
+		}
+
+		@Override
+		public void close() throws IOException
+		{
+			decoder.close();
 		}
 	}
 

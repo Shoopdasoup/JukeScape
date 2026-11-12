@@ -1,6 +1,6 @@
 # JukeScape - OSRS Music Replacer
 
-Replace OSRS music tracks with your own opus/ogg/mp3/wav files, without frame drops.
+Replace OSRS music tracks with your own opus/ogg/mp3/flac/wav files, without frame drops.
 
 JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/alowaniak/music-replacer), built so the game thread never waits on music.
 
@@ -19,7 +19,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 ## Usage
 
 - **Side panel:** the music icon in RuneLite's sidebar shows what's playing (with a skip button) and every replaced track. Click a track to see its playlist, reorder or remove songs, add more, or toggle shuffle.
-- **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3 or wav files.
+- **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3, flac or wav files.
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
 - **Drag and drop:** drop audio files, or a folder of them, onto a track in the side panel to add them to its playlist.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
@@ -32,7 +32,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
   - **Which levels or parts each song plays on**: click a song and enter them like printing pages, e.g. `1-4`, `1, 2, 4` or `9+`. A level or part with no song keeps the previous one's song, so four songs can cover every delve, and `2, 4` plays one song for both of Yama's Judges. Several songs on one level play in turn.
 - **Profiles:** give a track several playlists and switch between them without losing any, from the track's **Profile** button in the side panel or **Playlist → Switch profile / New profile** in game. A new profile starts empty, and an empty profile plays the game's own music.
 - **Everything else:** right-click the music tab icon → **Music replacements**:
-  - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it
+  - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.flac`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it
   - *Reload folder*, *Remove all replacements*
 
 A single replacement loops and a playlist keeps going until the game moves to another track. Replacements follow the in-game master and music volume, and fade between tracks.
@@ -77,3 +77,4 @@ A JDK 11 or newer is needed to build it. To log in with a Jagex account in devel
 - MP3 decoding by [JLayer](https://github.com/umjammer/jlayer) (LGPL 2.1)
 - Ogg Vorbis decoding by [JOrbis](http://www.jcraft.com/jorbis/) (LGPL 2.0)
 - Opus decoding by [Concentus](https://github.com/lostromb/concentus), a Java port of libopus (BSD)
+- FLAC decoding is JukeScape's own, written from the format specification ([RFC 9639](https://www.rfc-editor.org/rfc/rfc9639)). Mono and stereo files at any sample rate and bit depth play; 24-bit audio plays at 16 bits.

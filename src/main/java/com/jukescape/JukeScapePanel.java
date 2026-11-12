@@ -351,7 +351,7 @@ final class JukeScapePanel extends PluginPanel
 				}
 				if (!done)
 				{
-					plugin.chat("Only opus, ogg, mp3 and wav files" + (plugin.sources().isEmpty() ? "" : ", or YouTube links,")
+					plugin.chat("Only opus, ogg, mp3, flac and wav files" + (plugin.sources().isEmpty() ? "" : ", or YouTube links,")
 						+ " can be added to " + entry.track + ".");
 				}
 				e.dropComplete(done);

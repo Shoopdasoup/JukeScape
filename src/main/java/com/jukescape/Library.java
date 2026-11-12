@@ -582,7 +582,16 @@ final class Library
 			{
 				Files.copy(source, staged, StandardCopyOption.REPLACE_EXISTING);
 			}
-			verifyPlayable(staged);
+			try
+			{
+				verifyPlayable(staged);
+			}
+			catch (IOException e)
+			{
+				// Name the player's file, not the temporary copy
+				String message = String.valueOf(e.getMessage()).replace(staged.getFileName().toString(), source.getFileName().toString());
+				throw new IOException(message, e);
+			}
 
 			Entry old = get(track);
 			if (old != null && old.layered)

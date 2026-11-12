@@ -5,15 +5,29 @@ import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.dnd.DnDConstants;
+import java.awt.dnd.DropTarget;
+import java.awt.dnd.DropTargetAdapter;
+import java.awt.dnd.DropTargetDragEvent;
+import java.awt.dnd.DropTargetDropEvent;
+import java.awt.dnd.DropTargetEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import javax.swing.BorderFactory;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
@@ -25,9 +39,11 @@ import javax.swing.JPopupMenu;
 import javax.swing.JRadioButtonMenuItem;
 import javax.swing.SwingConstants;
 import javax.swing.Timer;
+import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
@@ -38,6 +54,7 @@ import net.runelite.client.ui.components.IconTextField;
  * Sidebar panel listing replaced tracks and their playlists. Everything here runs on the Swing thread and only reads
  * the library's immutable index; changes go through the plugin's IO threads.
  */
+@Slf4j
 final class JukeScapePanel extends PluginPanel
 {
 	private static final int REFRESH_MS = 500;
@@ -283,7 +300,132 @@ final class JukeScapePanel extends PluginPanel
 			body.add(actions(entry));
 			box.add(body, BorderLayout.CENTER);
 		}
+		acceptDrops(box, entry);
 		return box;
+	}
+
+	/**
+	 * Lets audio files (or folders of them) and links be dragged onto a track to add them to its playlist. The track
+	 * outlines while something is dragged over it.
+	 */
+	private void acceptDrops(JPanel box, Library.Entry entry)
+	{
+		Border normal = new EmptyBorder(1, 1, 1, 1);
+		Border hover = BorderFactory.createLineBorder(ColorScheme.BRAND_ORANGE);
+		box.setBorder(normal);
+		new DropTarget(box, DnDConstants.ACTION_COPY, new DropTargetAdapter()
+		{
+			@Override
+			public void dragEnter(DropTargetDragEvent e)
+			{
+				if (e.isDataFlavorSupported(DataFlavor.javaFileListFlavor) || e.isDataFlavorSupported(DataFlavor.stringFlavor))
+				{
+					e.acceptDrag(DnDConstants.ACTION_COPY);
+					box.setBorder(hover);
+				}
+				else
+				{
+					e.rejectDrag();
+				}
+			}
+
+			@Override
+			public void dragExit(DropTargetEvent e)
+			{
+				box.setBorder(normal);
+			}
+
+			@Override
+			public void drop(DropTargetDropEvent e)
+			{
+				box.setBorder(normal);
+				e.acceptDrop(DnDConstants.ACTION_COPY);
+				boolean done = false;
+				try
+				{
+					done = dropped(entry, e.getTransferable());
+				}
+				catch (Exception ex)
+				{
+					log.warn("Couldn't read what was dropped on {}", entry.track, ex);
+				}
+				if (!done)
+				{
+					plugin.chat("Only opus, ogg, mp3 and wav files" + (plugin.sources().isEmpty() ? "" : ", or YouTube links,")
+						+ " can be added to " + entry.track + ".");
+				}
+				e.dropComplete(done);
+			}
+		}, true);
+	}
+
+	/**
+	 * Adds what was dropped on a track: audio files, the audio files in dropped folders, or a link (dragged from a
+	 * browser, or an Internet shortcut file) that a source accepts.
+	 *
+	 * @return false if nothing in it could be added
+	 */
+	private boolean dropped(Library.Entry entry, Transferable t) throws Exception
+	{
+		List<String> texts = new ArrayList<>();
+		if (t.isDataFlavorSupported(DataFlavor.javaFileListFlavor))
+		{
+			List<Path> songs = new ArrayList<>();
+			for (Object o : (List<?>) t.getTransferData(DataFlavor.javaFileListFlavor))
+			{
+				Path path = ((File) o).toPath();
+				if (Files.isDirectory(path))
+				{
+					try (Stream<Path> files = Files.list(path))
+					{
+						files.filter(this::isSong).sorted().forEach(songs::add);
+					}
+				}
+				else if (isSong(path))
+				{
+					songs.add(path);
+				}
+				else if (path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".url"))
+				{
+					// A link dragged out of a browser into a folder, then onto the panel
+					for (String line : Files.readAllLines(path, StandardCharsets.ISO_8859_1))
+					{
+						if (line.startsWith("URL="))
+						{
+							texts.add(line.substring(4).trim());
+						}
+					}
+				}
+			}
+			if (!songs.isEmpty())
+			{
+				// Explorer hands them over in no particular order
+				songs.sort(Comparator.comparing(p -> p.getFileName().toString().toLowerCase(Locale.ROOT)));
+				plugin.installFiles(entry.track, songs, true);
+				return true;
+			}
+		}
+		if (t.isDataFlavorSupported(DataFlavor.stringFlavor))
+		{
+			texts.add(((String) t.getTransferData(DataFlavor.stringFlavor)).trim());
+		}
+		for (String text : texts)
+		{
+			for (ReplacementSource source : plugin.sources())
+			{
+				if (source.accepts(text))
+				{
+					source.drop(entry.track, text, this);
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private boolean isSong(Path path)
+	{
+		return Library.extension(path.getFileName().toString()) != null && Files.isRegularFile(path);
 	}
 
 	private JPanel songRow(Library.Entry entry, int index, boolean trackPlaying)
@@ -510,7 +652,8 @@ final class JukeScapePanel extends PluginPanel
 		actions.setBorder(new EmptyBorder(4, 0, 0, 0));
 
 		JButton add = button("Add");
-		add.setToolTipText("Add songs to this track's playlist");
+		add.setToolTipText("Add songs to this track's playlist. You can also drag audio files"
+			+ (plugin.sources().isEmpty() ? "" : " or YouTube links") + " onto the track.");
 		add.addActionListener(e ->
 		{
 			JPopupMenu menu = new JPopupMenu();
@@ -520,7 +663,7 @@ final class JukeScapePanel extends PluginPanel
 			for (ReplacementSource source : plugin.sources())
 			{
 				JMenuItem item = new JMenuItem(source.label() + "...");
-				item.addActionListener(ev -> plugin.addFrom(source, entry.track));
+				item.addActionListener(ev -> plugin.addFrom(source, entry.track, this));
 				menu.add(item);
 			}
 			menu.show(add, 0, add.getHeight());

@@ -21,6 +21,7 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 - **Side panel:** the music icon in RuneLite's sidebar shows what's playing (with a skip button) and every replaced track. Click a track to see its playlist, reorder or remove songs, add more, or toggle shuffle.
 - **Replace a track:** right-click it in the music tab → **Replace**, then pick one or more opus, ogg, mp3 or wav files.
 - **Build a playlist:** right-click a replaced (bold) track → **Add song**. Songs play one after another, in the order you added them.
+- **Drag and drop:** drop audio files, or a folder of them, onto a track in the side panel to add them to its playlist.
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
 - **Play modes:** the track's **Mode** button in the side panel (or **Playlist → Play mode** in game) plays the songs in order or shuffled. Some boss tracks also get a mode of their own:
   - **Delve** (The Doom, for the Doom of Mokhaiotl): a song for each delve level. Song 1 plays on level 1, song 2 on level 2, and so on, as deep as you like: give it 16 songs and levels 9–16 each get their own. The last song covers every level deeper than your list goes. The song changes as the screen fades in on the new level.
@@ -48,7 +49,7 @@ Files live in `%USERPROFILE%\.runelite\music-replacer`, the same folder the orig
 ## YouTube add-on (developer mode only)
 
 `youtube-addon/` holds a second plugin, **JukeScape YouTube**, that adds *A YouTube link* and *A YouTube search* to the Replace and Add song menus.
-Paste a video link, or a playlist link to download up to 200 songs into a track's playlist. Playlists and long videos show their length and estimated size and ask before downloading.
+Paste a video link, or a playlist link to download up to 200 songs into a track's playlist. Links can also be dragged from a browser onto a track in the side panel, and when started from the panel its prompts are dialogs rather than the chatbox. Playlists and long videos show their length and estimated size and ask before downloading.
 It isn't part of the Plugin Hub plugin: it runs [yt-dlp](https://github.com/yt-dlp/yt-dlp), and Hub plugins aren't allowed to run external programs.
 Move `youtube-addon/` out of this repository before submitting to the Hub.
 

@@ -4,12 +4,14 @@ import com.google.common.base.Strings;
 import com.google.inject.Module;
 import com.google.inject.Provider;
 import com.google.inject.Provides;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.io.File;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -246,12 +248,15 @@ public class JukeScapePlugin extends Plugin
 	}
 
 	/**
-	 * Adds a song to {@code track} from a companion plugin's source. Sources prompt in the chatbox, so this hops to the
-	 * client thread.
+	 * Adds a song to {@code track} from a companion plugin's source, started from the side panel. Sources that can
+	 * prompt in dialogs do; the rest prompt in the chatbox, on the client thread. Call on the Swing thread.
 	 */
-	void addFrom(ReplacementSource source, String track)
+	void addFrom(ReplacementSource source, String track, Component parent)
 	{
-		clientThread.invokeLater(() -> source.choose(track, true));
+		if (!source.chooseFromPanel(track, true, parent))
+		{
+			clientThread.invokeLater(() -> source.choose(track, true));
+		}
 	}
 
 	public void removeReplacementSource(ReplacementSource source)
@@ -707,25 +712,57 @@ public class JukeScapePlugin extends Plugin
 				return;
 			}
 			lastChooserDir = files[0].getParentFile();
-			runIo((add ? "add songs to " : "replace ") + track, () ->
+			List<Path> paths = new ArrayList<>();
+			for (File file : files)
 			{
-				for (int i = 0; i < files.length; i++)
+				paths.add(file.toPath());
+			}
+			installFiles(track, paths, add);
+		});
+	}
+
+	/**
+	 * Copies audio files in as songs, skipping (and reporting) any that won't play. When replacing, the first one
+	 * that works replaces the track and the rest are added after it.
+	 */
+	void installFiles(String track, List<Path> files, boolean add)
+	{
+		runIo((add ? "add songs to " : "replace ") + track, () ->
+		{
+			int installed = 0;
+			for (Path file : files)
+			{
+				try
 				{
-					library.install(track, files[i].toPath(), false, Library.songName(files[i].toPath()), add || i > 0);
+					library.install(track, file, false, Library.songName(file), add || installed > 0);
+					installed++;
 				}
-				if (files.length == 1)
+				catch (InterruptedIOException e)
 				{
-					reportInstalled(track, Library.songName(files[0].toPath()), add);
+					throw e;
 				}
-				else if (add)
+				catch (IOException e)
 				{
-					chat("Added " + files.length + " songs to " + track + " (" + songCount(track) + " songs).");
+					log.warn("Couldn't add {} to {}", file, track, e);
+					chat("Couldn't add " + file.getFileName() + ": " + e.getMessage());
 				}
-				else
-				{
-					chat("Replaced " + track + " with " + files.length + " songs.");
-				}
-			});
+			}
+			if (installed == 0)
+			{
+				return;
+			}
+			if (files.size() == 1)
+			{
+				reportInstalled(track, Library.songName(files.get(0)), add);
+			}
+			else if (add)
+			{
+				chat("Added " + installed + (installed == 1 ? " song" : " songs") + " to " + track + " (" + songCount(track) + " songs).");
+			}
+			else
+			{
+				chat("Replaced " + track + " with " + installed + (installed == 1 ? " song." : " songs."));
+			}
 		});
 	}
 

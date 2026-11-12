@@ -25,9 +25,11 @@ JukeScape started as a rewrite of [alowaniak/music-replacer](https://github.com/
 - **Shuffle, remove songs or remove the replacement:** right-click a replaced track → **Playlist**.
 - **Play modes:** the track's **Mode** button in the side panel (or **Playlist → Play mode** in game) plays the songs in order or shuffled. Some boss tracks also get a mode of their own:
   - **Delve** (The Doom, for the Doom of Mokhaiotl): a song for each delve level. Song 1 plays on level 1, song 2 on level 2, and so on, as deep as you like: give it 16 songs and levels 9–16 each get their own. The last song covers every level deeper than your list goes. The song changes as the screen fades in on the new level.
-- **Advanced options** (in JukeScape's settings) adds more controls to the side panel. For Delve:
-  - **Song changes**: on arrival, or when the Doom appears.
-  - **Which levels each song plays on**: click a song and enter levels like printing pages, e.g. `1-4`, `1, 2, 4` or `9+`. A level with no song keeps the previous level's song, so four songs can cover every delve. Several songs on one level play in turn.
+  - **Yama phases** (Sign Here, Yama's arena): a song for each of the fight's five parts: Phase 1, Judge 1, Phase 2, Judge 2 and Phase 3. Song 1 plays from arriving until the first Judge, song 2 while fighting the first Judge of Yama, and so on. Each song starts as the screen fades in on its part. After the kill the last song keeps playing until you leave.
+- **Advanced options** (in JukeScape's settings) adds more controls to the side panel:
+  - **Song changes** (Delve): on arrival, or when the Doom appears.
+  - **Throne music** (Yama phases): a song of its own, part 0, for while Yama sits on his throne before and after the fight. The fight's songs start as he stands up. With it on, song 1 is the throne song and the rest move along one, unless you've chosen their parts.
+  - **Which levels or parts each song plays on**: click a song and enter them like printing pages, e.g. `1-4`, `1, 2, 4` or `9+`. A level or part with no song keeps the previous one's song, so four songs can cover every delve, and `2, 4` plays one song for both of Yama's Judges. Several songs on one level play in turn.
 - **Profiles:** give a track several playlists and switch between them without losing any, from the track's **Profile** button in the side panel or **Playlist → Switch profile / New profile** in game. A new profile starts empty, and an empty profile plays the game's own music.
 - **Everything else:** right-click the music tab icon → **Music replacements**:
   - *Open replacements folder*: any `Track Name.opus`/`.ogg`/`.mp3`/`.wav` you drop in there replaces that track, and a `Track Name` folder of songs is a playlist for it

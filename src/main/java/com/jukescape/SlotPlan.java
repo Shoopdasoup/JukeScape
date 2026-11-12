@@ -12,8 +12,10 @@ import java.util.regex.Pattern;
  * Which songs play in which slots of a {@link BossMode}, shared by every boss mode.
  * <p>
  * Each song plays in the slots its spec lists, written like page ranges when printing: "1-4", "1, 2, 4" or "9+"
- * (9 and up). Slots are numbered from 1 here, as players see them. A song with no spec plays in the slot matching its
- * position in the playlist. A slot no song lists keeps the previous slot's songs, and slots before the first listed
+ * (9 and up). Numbers here are the ones players see: slot 0 is number {@link BossMode#firstNumber()}. A song with
+ * no spec plays in the slot matching its position in the playlist, counting from the profile's
+ * {@link BossMode#firstSlot first slot}. A slot no song lists keeps the previous slot's songs, and slots before the
+ * first listed
  * one use the earliest listed. Several songs in one slot play in turn.
  */
 final class SlotPlan
@@ -31,6 +33,14 @@ final class SlotPlan
 	 */
 	static List<int[]> parse(String spec)
 	{
+		return parse(spec, 0);
+	}
+
+	/**
+	 * @param min the lowest number allowed
+	 */
+	static List<int[]> parse(String spec, int min)
+	{
 		List<int[]> ranges = new ArrayList<>();
 		for (String part : spec.split(","))
 		{
@@ -46,9 +56,13 @@ final class SlotPlan
 			}
 			int from = Integer.parseInt(m.group(1));
 			int to = m.group(4) != null ? OPEN : m.group(2) != null ? Integer.parseInt(m.group(3)) : from;
-			if (from < 1 || to < from)
+			if (to < from)
 			{
 				throw new IllegalArgumentException("'" + part + "' isn't a valid range");
+			}
+			if (from < min)
+			{
+				throw new IllegalArgumentException("the numbers start at " + min);
 			}
 			ranges.add(new int[]{from, to});
 		}
@@ -78,7 +92,7 @@ final class SlotPlan
 	static List<Path> songsFor(int slot, Library.Entry entry)
 	{
 		List<Path> songs = new ArrayList<>();
-		for (int i : owners(slot + 1, ranges(entry), entry.bossMode))
+		for (int i : owners(slot + entry.bossMode.firstNumber(), ranges(entry), entry))
 		{
 			songs.add(entry.files.get(i));
 		}
@@ -93,12 +107,13 @@ final class SlotPlan
 	{
 		BossMode mode = entry.bossMode;
 		List<List<int[]>> ranges = ranges(entry);
+		int low = low(entry);
 		int last = lastBound(ranges, mode);
 
 		List<int[]> covered = new ArrayList<>();
-		for (int level = 1; level <= last; level++)
+		for (int level = low; level <= last; level++)
 		{
-			if (owners(level, ranges, mode).contains(song))
+			if (owners(level, ranges, entry).contains(song))
 			{
 				if (!covered.isEmpty() && covered.get(covered.size() - 1)[1] == level - 1)
 				{
@@ -111,7 +126,7 @@ final class SlotPlan
 			}
 		}
 		// Past every bound, each level plays the same as the one after the last bound
-		boolean onward = mode.slotCount() == BossMode.UNLIMITED && owners(last + 1, ranges, mode).contains(song);
+		boolean onward = mode.slotCount() == BossMode.UNLIMITED && owners(last + 1, ranges, entry).contains(song);
 		if (onward)
 		{
 			if (!covered.isEmpty() && covered.get(covered.size() - 1)[1] == last)
@@ -127,6 +142,10 @@ final class SlotPlan
 		{
 			return "Unused";
 		}
+		if (mode.slotCount() != BossMode.UNLIMITED)
+		{
+			return named(covered, low, mode);
+		}
 
 		List<String> parts = new ArrayList<>();
 		for (int[] r : covered)
@@ -135,6 +154,35 @@ final class SlotPlan
 		}
 		boolean plural = covered.size() > 1 || (covered.get(0)[0] != covered.get(0)[1] && covered.get(0)[1] != OPEN);
 		return mode.slotNoun() + (plural ? "s " : " ") + String.join(", ", parts);
+	}
+
+	/**
+	 * Covered slots by their names, for modes with a fixed set of them: "Judge 1", "Phase 1 & Phase 3", "Phase 2 to
+	 * Phase 3" or "All parts".
+	 */
+	private static String named(List<int[]> covered, int low, BossMode mode)
+	{
+		int base = mode.firstNumber();
+		if (covered.size() == 1 && covered.get(0)[0] == low && covered.get(0)[1] == mode.slotCount() - 1 + base)
+		{
+			return "All parts";
+		}
+		List<String> parts = new ArrayList<>();
+		for (int[] r : covered)
+		{
+			if (r[1] - r[0] >= 2)
+			{
+				parts.add(mode.slotName(r[0] - base) + " to " + mode.slotName(r[1] - base));
+				continue;
+			}
+			for (int slot = r[0]; slot <= r[1]; slot++)
+			{
+				parts.add(mode.slotName(slot - base));
+			}
+		}
+		// "Judge 1 & Judge 2": the panel's pixel font draws commas much like colons, and a colon follows
+		int last = parts.size() - 1;
+		return last == 0 ? parts.get(0) : String.join(", ", parts.subList(0, last)) + " & " + parts.get(last);
 	}
 
 	/**
@@ -159,7 +207,7 @@ final class SlotPlan
 					// Edited by hand into something invalid; treat as unset
 				}
 			}
-			all.add(parsed != null ? parsed : Collections.singletonList(new int[]{i + 1, i + 1}));
+			all.add(parsed != null ? parsed : Collections.singletonList(new int[]{low(entry) + i, low(entry) + i}));
 		}
 		return all;
 	}
@@ -168,17 +216,19 @@ final class SlotPlan
 	 * The songs that play on {@code level}: the ones listing it, else the nearest earlier level's, else the earliest
 	 * listed level's.
 	 */
-	private static List<Integer> owners(int level, List<List<int[]>> ranges, BossMode mode)
+	private static List<Integer> owners(int level, List<List<int[]>> ranges, Library.Entry entry)
 	{
+		BossMode mode = entry.bossMode;
+		int low = low(entry);
 		if (ranges.isEmpty())
 		{
 			return Collections.emptyList();
 		}
 		if (mode.slotCount() != BossMode.UNLIMITED)
 		{
-			level = Math.min(level, mode.slotCount());
+			level = Math.min(level, mode.slotCount() - 1 + mode.firstNumber());
 		}
-		for (int l = level; l >= 1; l--)
+		for (int l = level; l >= low; l--)
 		{
 			List<Integer> owners = listing(l, ranges);
 			if (!owners.isEmpty())
@@ -186,15 +236,21 @@ final class SlotPlan
 				return owners;
 			}
 		}
+		// The earliest listed slot this profile uses, or failing that the earliest listed at all
 		int first = OPEN;
+		int any = OPEN;
 		for (List<int[]> song : ranges)
 		{
 			for (int[] r : song)
 			{
-				first = Math.min(first, r[0]);
+				any = Math.min(any, r[0]);
+				if (r[1] >= low)
+				{
+					first = Math.min(first, Math.max(r[0], low));
+				}
 			}
 		}
-		return listing(first, ranges);
+		return listing(first != OPEN ? first : any, ranges);
 	}
 
 	private static List<Integer> listing(int level, List<List<int[]>> ranges)
@@ -215,13 +271,21 @@ final class SlotPlan
 	}
 
 	/**
+	 * The lowest number {@code entry}'s profile uses, where its first song goes by default.
+	 */
+	private static int low(Library.Entry entry)
+	{
+		return entry.bossMode.firstSlot(entry) + entry.bossMode.firstNumber();
+	}
+
+	/**
 	 * The highest level any range starts or ends at, past which nothing changes.
 	 */
 	private static int lastBound(List<List<int[]>> ranges, BossMode mode)
 	{
 		if (mode.slotCount() != BossMode.UNLIMITED)
 		{
-			return mode.slotCount();
+			return mode.slotCount() - 1 + mode.firstNumber();
 		}
 		int last = 1;
 		for (List<int[]> song : ranges)

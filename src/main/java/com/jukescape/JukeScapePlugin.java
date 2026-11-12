@@ -565,7 +565,7 @@ public class JukeScapePlugin extends Plugin
 	 */
 	static String modeDescription(Library.Entry entry)
 	{
-		return entry.bossMode != null ? entry.bossMode.name().toLowerCase() + " mode" : entry.shuffle ? "shuffled" : "in order";
+		return entry.bossMode != null ? entry.bossMode.name() + " mode" : entry.shuffle ? "shuffled" : "in order";
 	}
 
 	void setMode(String track, String mode)
@@ -581,7 +581,8 @@ public class JukeScapePlugin extends Plugin
 			String message = track + " now plays " + modeDescription(entry).replace(" mode", "") + ".";
 			if (entry.bossMode != null)
 			{
-				message = track + " now plays in " + entry.bossMode.name() + " mode: song 1 for " + entry.bossMode.slotName(0)
+				BossMode boss = entry.bossMode;
+				message = track + " now plays in " + boss.name() + " mode: song 1 for " + boss.slotName(boss.firstSlot(entry))
 					+ ", song 2 for the next, and so on. The last song covers the rest.";
 			}
 			chat(message);

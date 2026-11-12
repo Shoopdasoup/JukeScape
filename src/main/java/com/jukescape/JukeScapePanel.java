@@ -567,18 +567,39 @@ final class JukeScapePanel extends PluginPanel
 	 */
 	private void chooseSlots(Library.Entry entry, Path song, int index)
 	{
-		String noun = entry.bossMode.slotNoun().toLowerCase();
+		BossMode mode = entry.bossMode;
+		String noun = mode.slotNoun().toLowerCase();
+		boolean named = mode.slotCount() != BossMode.UNLIMITED;
 		String name = Library.songName(song);
 		String current = entry.slotSpecs.getOrDefault(name, "");
-		Object answer = JOptionPane.showInputDialog(this,
-			"<html>Which " + noun + "s should <b>" + escapeHtml(name) + "</b> play on?<br><br>"
-				+ "Examples:<br>"
-				+ "&nbsp;&nbsp;<b>1-4</b> &nbsp;" + noun + "s 1 to 4<br>"
-				+ "&nbsp;&nbsp;<b>1, 2, 4</b> &nbsp;just those " + noun + "s<br>"
-				+ "&nbsp;&nbsp;<b>9+</b> &nbsp;" + noun + " 9 and deeper<br><br>"
-				+ "Any " + noun + " without a song keeps playing the one before it.<br>"
-				+ "Leave this empty to play it on " + noun + " " + (index + 1) + ", its place in the list.</html>",
-			"JukeScape", JOptionPane.PLAIN_MESSAGE, null, null, current);
+		StringBuilder text = new StringBuilder("<html>Which " + noun + "s should <b>" + escapeHtml(name) + "</b> play on?<br><br>");
+		if (named)
+		{
+			// The numbers stand for named parts, so say which is which
+			for (int slot = mode.firstSlot(entry); slot < mode.slotCount(); slot++)
+			{
+				text.append("&nbsp;&nbsp;<b>").append(slot + mode.firstNumber()).append("</b> &nbsp;").append(escapeHtml(mode.slotName(slot))).append("<br>");
+			}
+			text.append("<br>");
+		}
+		text.append("Examples:<br>");
+		for (String[] example : mode.specExamples())
+		{
+			text.append("&nbsp;&nbsp;<b>").append(escapeHtml(example[0])).append("</b> &nbsp;").append(escapeHtml(example[1])).append("<br>");
+		}
+		text.append("<br>Any ").append(noun).append(" without a song keeps playing the one before it.<br>");
+		int placeSlot = mode.firstSlot(entry) + index;
+		if (named && placeSlot >= mode.slotCount())
+		{
+			text.append("Leave this empty and it won't play: its place in the list is past the last ").append(noun).append(".</html>");
+		}
+		else
+		{
+			String place = named ? mode.slotName(placeSlot) : noun + " " + (placeSlot + mode.firstNumber());
+			text.append("Leave this empty to play it on ").append(escapeHtml(place)).append(", its place in the list.</html>");
+		}
+		Object answer = JOptionPane.showInputDialog(this, text.toString(), "JukeScape", JOptionPane.PLAIN_MESSAGE, null,
+			null, current);
 		if (answer == null || answer.toString().trim().equals(current))
 		{
 			return;
@@ -588,7 +609,7 @@ final class JukeScapePanel extends PluginPanel
 		{
 			try
 			{
-				SlotPlan.parse(spec);
+				SlotPlan.parse(spec, mode.firstNumber());
 			}
 			catch (IllegalArgumentException e)
 			{
@@ -683,7 +704,7 @@ final class JukeScapePanel extends PluginPanel
 				for (BossMode boss : bossModes)
 				{
 					modeItem(menu, group, entry, boss.name(), boss.id(), "Play " + boss.description()
-						+ ". Song 1 is for " + boss.slotName(0) + ", and so on; reorder them with the arrows.");
+						+ ". Song 1 is for " + boss.slotName(boss.firstSlot(entry)) + ", and so on; reorder them with the arrows.");
 				}
 				menu.show(mode, 0, mode.getHeight());
 			});

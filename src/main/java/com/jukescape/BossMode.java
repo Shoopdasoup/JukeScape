@@ -12,7 +12,7 @@ import net.runelite.api.events.ChatMessage;
  */
 interface BossMode
 {
-	List<BossMode> ALL = List.of(new DelveMode());
+	List<BossMode> ALL = List.of(new DelveMode(), new YamaMode());
 
 	int UNLIMITED = Integer.MAX_VALUE;
 
@@ -47,6 +47,24 @@ interface BossMode
 	String slotNoun();
 
 	/**
+	 * The number players use for slot 0 when listing which slots a song plays in: 1 for delve level 1, but 0 for
+	 * Yama's throne, so its fight parts are numbered from 1.
+	 */
+	default int firstNumber()
+	{
+		return 1;
+	}
+
+	/**
+	 * The first slot {@code entry}'s profile uses, which song 1 plays in unless given a list of its own. Lets an
+	 * optional slot at the start, like Yama's throne, be turned off.
+	 */
+	default int firstSlot(Library.Entry entry)
+	{
+		return 0;
+	}
+
+	/**
 	 * A slot's name, e.g. "Level 1" for slot 0.
 	 */
 	default String slotName(int slot)
@@ -61,6 +79,19 @@ interface BossMode
 	 * @param entry the profile playing, for its {@link #options()}
 	 */
 	int activeSlot(Client client, Library.Entry entry);
+
+	/**
+	 * Example slot lists for the advanced options dialog, each a spec and what it means, like {"1-4", "levels 1 to
+	 * 4"}.
+	 */
+	default List<String[]> specExamples()
+	{
+		String noun = slotNoun().toLowerCase();
+		return List.of(
+			new String[]{"1-4", noun + "s 1 to 4"},
+			new String[]{"1, 2, 4", "just those " + noun + "s"},
+			new String[]{"9+", noun + " 9 and deeper"});
+	}
 
 	/**
 	 * Settings the mode offers per profile, shown as advanced options in the panel.
